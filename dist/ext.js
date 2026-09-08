@@ -1547,7 +1547,7 @@ var MC_PICKER = (() => {
 
   function timedTextTick() {
     const el = document.querySelector(N.SEL.timedtext);
-    if (el === ttEl) return;
+    if (el === ttEl) { applyNativeVisibility(); return; }
     ttEl = el;
     ttLast = '';
     if (!el) { mark('native:gone', `${N.SEL.timedtext} left the DOM`); return; }
@@ -1721,10 +1721,29 @@ var MC_PICKER = (() => {
     if (texts.some(Boolean)) mark('cue', `content=${c.t.toFixed(3)} ${texts.map((t) => JSON.stringify(t.slice(0, 40))).join(' / ')}`, { quiet: true });
   }
 
-  /** Netflix's own subtitle layer: invisible while we render (it keeps updating, which Layer C needs). */
+  /**
+   * Netflix's own subtitle layer: invisible while we render (it keeps updating, which layer C
+   * needs). A constructed stylesheet with !important survives Netflix rewriting the element's
+   * style attribute (observed after an ad break); the inline opacity is a belt-and-braces
+   * fallback re-applied on every tick.
+   */
+  /** @type {CSSStyleSheet | null} */
+  let nativeSheet = null;
   function applyNativeVisibility() {
-    if (ttEl instanceof HTMLElement) ttEl.style.opacity = session ? '0' : '';
+    const hide = !!session;
+    try {
+      if (!nativeSheet) {
+        nativeSheet = new CSSStyleSheet();
+        nativeSheet.replaceSync(`${N.SEL.timedtext} { opacity: 0 !important; }`);
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, nativeSheet];
+      }
+      nativeSheet.disabled = !hide;
+    } catch (err) {
+      if (!nativeSheetWarned) { nativeSheetWarned = true; U.warn('constructed stylesheet unavailable; relying on inline opacity for the native layer:', err); }
+    }
+    if (ttEl instanceof HTMLElement && ttEl.style.opacity !== (hide ? '0' : '')) ttEl.style.opacity = hide ? '0' : '';
   }
+  let nativeSheetWarned = false;
 
   /** Mount the picker inside the player view; mirror the control bar's visibility. */
   function pickerTick() {
