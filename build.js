@@ -17,7 +17,7 @@ const DIST = path.join(__dirname, 'dist');
 const SHARED = ['netflix.js', 'util.js', 'bridge.js'];
 const BUNDLES = {
   'page.js': [...SHARED, 'page-hook.js'], // MAIN world
-  'ext.js': [...SHARED, 'subtitles.js', 'clock.js', 'overlay.js', 'settings.js', 'pinyin.js', 'picker.js', 'content.js'], // isolated world
+  'ext.js': [...SHARED, 'subtitles.js', 'clock.js', 'overlay.js', 'settings.js', 'pinyin.js', 'assist.js', 'picker.js', 'content.js'], // isolated world
 };
 
 function build() {

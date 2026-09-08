@@ -109,10 +109,57 @@ var MC_SUBS = (() => {
     return out;
   }
 
+  /**
+   * Let each cue linger into following silence until it has been up at least `required(cue)`
+   * seconds, never past the next non-overlapping cue's start (minus `gap`). Deterministic over
+   * the whole list, so it holds under seeks. Returns new cue objects (`end0` keeps the
+   * original end); the input is untouched.
+   * @param {Cue[]} cues sorted by begin
+   * @param {(cue: Cue) => number} required seconds a cue should stay up
+   * @param {number} [gap]
+   * @returns {Array<Cue & {end0?: number}>}
+   */
+  function extendCues(cues, required, gap = 0.05) {
+    return cues.map((c, i) => {
+      const want = c.begin + required(c);
+      if (want <= c.end) return c;
+      let cap = Infinity;
+      for (let j = i + 1; j < cues.length; j++) {
+        if (cues[j].begin >= c.end) { cap = cues[j].begin - gap; break; }
+      }
+      const end = Math.min(want, cap);
+      return end > c.end ? { ...c, end, end0: c.end } : c;
+    });
+  }
+
+  /**
+   * Keep a partner line's cues up as long as the driver line's cues they overlap with (after
+   * extension), so the two lines vanish together. Capped by the partner's own next cue.
+   * @param {Cue[]} partner sorted by begin
+   * @param {Array<Cue & {end0?: number}>} driver sorted by begin, possibly extended
+   * @param {number} [gap]
+   * @returns {Array<Cue & {end0?: number}>}
+   */
+  function alignEnds(partner, driver, gap = 0.05) {
+    let k = 0;
+    return partner.map((c, i) => {
+      while (k < driver.length && (driver[k].end0 ?? driver[k].end) <= c.begin) k++;
+      let target = c.end;
+      for (let j = k; j < driver.length && driver[j].begin < c.end; j++) target = Math.max(target, driver[j].end);
+      if (target <= c.end) return c;
+      let cap = Infinity;
+      for (let j = i + 1; j < partner.length; j++) {
+        if (partner[j].begin >= c.end) { cap = partner[j].begin - gap; break; }
+      }
+      const end = Math.min(target, cap);
+      return end > c.end ? { ...c, end, end0: c.end } : c;
+    });
+  }
+
   /** Text form used to match a native cue against parsed cues: no whitespace, no punctuation, lower case. @param {string} t */
   function normalizeForMatch(t) {
     return t.toLowerCase().replace(/[\s ‎‏]+/g, '').replace(/[.,!?;:'"“”‘’\-–—…()\[\]♪]/g, '');
   }
 
-  return { parseTimestamp, parseWebVTT, activeCues, stripTags, decodeEntities, normalizeForMatch };
+  return { parseTimestamp, parseWebVTT, activeCues, stripTags, decodeEntities, normalizeForMatch, extendCues, alignEnds };
 })();

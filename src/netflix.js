@@ -203,6 +203,8 @@ var MC_NFLX = (() => {
     pauseAd: '[data-uia^="pause-ad"]',
     /** Ad-break markers inside the scrubber (only while controls are shown). */
     adMarkers: '[data-uia="ad-markers"]',
+    /** The control bar's play button (present while paused with controls showing). */
+    playButton: '[data-uia="control-play-pause-play"]',
   };
 
   /** Text that suggests ad UI ("Ad 1 of 3", "Advertisement"). Discovery heuristic only. */

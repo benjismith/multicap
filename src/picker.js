@@ -28,7 +28,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, minRate?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -41,8 +41,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}}} */
-    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true } };
+    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean}}} */
+    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -85,7 +85,7 @@ var MC_PICKER = (() => {
       renderPanel();
     }
 
-    /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any}} st */
+    /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any, assist?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -238,6 +238,40 @@ var MC_PICKER = (() => {
       bd.appendChild(bdc);
       bd.appendChild(el('Backdrop behind lines', 'flex:1;'));
       panel.appendChild(bd);
+
+      // ---- reading assist ----
+      panel.appendChild(el('Reading assist', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;'));
+      const as = state.assist;
+      const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes'], ['slow', 'Slow the caption down'], ['slowpause', 'Slow, then pause if still needed']];
+      for (const [value, label] of modes) {
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;';
+        const r = document.createElement('input');
+        r.type = 'radio'; r.name = 'multicap-assist-mode'; r.checked = as.mode === value; r.style.cssText = RADIO_CSS + 'justify-self:start;';
+        r.addEventListener('change', () => handlers.onAssist({ mode: value }));
+        row.appendChild(r);
+        row.appendChild(el(label, 'flex:1;'));
+        panel.appendChild(row);
+      }
+      slider('Per character', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + 's', (v) => handlers.onAssist({ secondsPerChar: v }));
+      slider('Slowest speed', as.minRate, MC_SETTINGS.ASSIST_RANGES.minRate, 0.05, (v) => v.toFixed(2) + 'x', (v) => handlers.onAssist({ minRate: v }));
+      const ex = document.createElement('label');
+      ex.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const exc = document.createElement('input');
+      exc.type = 'checkbox'; exc.checked = as.extend; exc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      exc.addEventListener('change', () => handlers.onAssist({ extend: exc.checked }));
+      ex.appendChild(exc);
+      ex.appendChild(el('Keep captions up into silence (any mode)', 'flex:1;'));
+      panel.appendChild(ex);
+      const ar = document.createElement('label');
+      ar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const arc = document.createElement('input');
+      arc.type = 'checkbox'; arc.checked = as.autoResume; arc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      arc.addEventListener('change', () => handlers.onAssist({ autoResume: arc.checked }));
+      ar.appendChild(arc);
+      ar.appendChild(el('Resume automatically after the reading time', 'flex:1;'));
+      ar.appendChild(el('Ctrl+Shift+P', 'color:rgba(255,255,255,.45);font-size:12px;'));
+      panel.appendChild(ar);
 
       const foot = document.createElement('label');
       foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';

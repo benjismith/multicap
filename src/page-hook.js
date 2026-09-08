@@ -306,6 +306,12 @@
     return rec.manifest.timedtexttracks.map((/** @type {any} */ t) => ({ ...N.describeTrack(t), url: N.trackDownloadUrl(t, N.WEBVTT_PROFILE) }));
   }
   bridge.handle('tracks', trackRows);
+  // Playback actions for the reading assist. Resume prefers Netflix's own UI (see content.js);
+  // these are the API fallbacks.
+  bridge.handle('pause', () => { const p = currentPlayer(); if (p) p.pause(); return !!p; });
+  bridge.handle('play', () => { const p = currentPlayer(); if (p) p.play(); return !!p; });
+  bridge.handle('rate', (/** @type {number} */ r) => { const p = currentPlayer(); if (p && typeof p.setPlaybackRate === 'function') p.setPlaybackRate(r); return p ? p.getPlaybackRate() : null; });
+  bridge.handle('get-rate', () => { const p = currentPlayer(); return p && typeof p.getPlaybackRate === 'function' ? p.getPlaybackRate() : 1; });
 
   bridge.handle('ping', () => 'pong');
   bridge.handle('manifests', manifestSummaries);
@@ -401,7 +407,8 @@
         '  __multicap.settings()   persisted preferences; __multicap.setLangs([\'en\', \'zh-Hant\']) to change slots',
         '  __multicap.setStyle({scale:1.2, bottom:10, slotScale:[1,1.2], backdrop:true})  overlay styling',
         '  __multicap.pinyin(\'你好世界\')  how a line would be annotated (needs the dictionary loaded)',
-        '  keyboard: Ctrl+Shift+M track picker, Ctrl+Shift+H hide/show',
+        '  __multicap.assist()     reading-assist state; __multicap.setAssist({mode:\'slowpause\', secondsPerChar:0.4})',
+        '  keyboard: Ctrl+Shift+M track picker, Ctrl+Shift+H hide/show, Ctrl+Shift+P reading assist on/off',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
         '  __multicap.probe()      introspect the player API now',
@@ -442,6 +449,9 @@
     setStyle: (style) => bridge.call('settings-set', { style }),
     /** @param {string} text */
     pinyin: (text) => bridge.call('pinyin', text),
+    assist: () => bridge.call('assist'),
+    /** @param {{mode?: string, secondsPerChar?: number, minRate?: number, autoResume?: boolean}} assist */
+    setAssist: (assist) => bridge.call('settings-set', { assist }),
     manifests: manifestSummaries,
     requests: () => state.requests,
     probe: () => probe(true),

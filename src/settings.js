@@ -13,14 +13,19 @@ var MC_SETTINGS = (() => {
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line;
    * rubyUnder: pinyin below the characters (true) or above them (false).
    */
-  /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style}} Settings */
+  /** @typedef {{mode: 'off' | 'pause' | 'slow' | 'slowpause', secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean, lastMode: 'pause' | 'slow' | 'slowpause'}} Assist */
+  /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
   const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
   /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
-  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE };
+  /** @type {Assist} */
+  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true, lastMode: 'slowpause' };
+  const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0], minRate: [0.3, 1.0] };
+  const ASSIST_MODES = ['off', 'pause', 'slow', 'slowpause'];
+  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -53,13 +58,22 @@ var MC_SETTINGS = (() => {
     st.backdrop = st.backdrop === true;
     st.rubyUnder = st.rubyUnder !== false;
     s.style = st;
+    const a = { ...DEFAULT_ASSIST, ...(s.assist && typeof s.assist === 'object' ? s.assist : {}) };
+    a.mode = ASSIST_MODES.includes(a.mode) ? a.mode : 'off';
+    a.lastMode = ASSIST_MODES.includes(a.lastMode) && a.lastMode !== 'off' ? a.lastMode : DEFAULT_ASSIST.lastMode;
+    if (a.mode !== 'off') a.lastMode = a.mode;
+    a.secondsPerChar = clamp(a.secondsPerChar, ASSIST_RANGES.secondsPerChar, DEFAULT_ASSIST.secondsPerChar);
+    a.minRate = clamp(a.minRate, ASSIST_RANGES.minRate, DEFAULT_ASSIST.minRate);
+    a.autoResume = a.autoResume !== false;
+    a.extend = a.extend !== false;
+    s.assist = a;
     return s;
   }
 
-  /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: Partial<Style>}} patch @returns {Promise<Settings>} */
+  /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
-    cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) } });
+    cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) }, assist: { ...cur.assist, ...(patch.assist || {}) } });
     try { await chrome.storage.local.set({ [KEY]: cache }); } catch (err) { MC_UTIL.warn('settings: save failed:', err); }
     for (const fn of listeners) { try { fn(cache); } catch (err) { MC_UTIL.warn('settings listener threw:', err); } }
     return cache;
@@ -71,5 +85,5 @@ var MC_SETTINGS = (() => {
   /** @param {(s: Settings) => void} fn */
   function onChange(fn) { listeners.push(fn); }
 
-  return { DEFAULTS, DEFAULT_STYLE, RANGES, load, save, get, onChange, normalize };
+  return { DEFAULTS, DEFAULT_STYLE, RANGES, DEFAULT_ASSIST, ASSIST_RANGES, ASSIST_MODES, load, save, get, onChange, normalize };
 })();

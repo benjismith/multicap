@@ -78,13 +78,16 @@
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
     clock.onSeek();
+    assist.reset();
     if (session) overlay.attach(v, SLOTS, overlayHost());
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
         let extra = '';
         if (ev === 'durationchange' || ev === 'loadedmetadata') extra = '  ' + durationVsManifest(v);
-        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); if (session) session.lastShown = null; }
+        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); if (session) session.lastShown = null; assist.reset(); }
+        else if (ev === 'pause') assist.onVideoPause();
+        else if (ev === 'play') assist.onVideoPlay();
         else if (ev === 'seeked') extra = '  ' + clockLine();
         mark('video:' + ev, videoDesc(v) + extra);
       });
@@ -252,17 +255,40 @@
   const SLOTS = 2;
   const clock = MC_CLOCK.create(bridge, () => video, () => domAd);
   const overlay = MC_OVERLAY.create();
+
+  /**
+   * Resume playback through Netflix's own controls when they are on screen (resuming through
+   * the player API while the pause card is up leaves the UI stuck on the card), else the API.
+   */
+  function resumePlayback() {
+    const card = document.querySelector(N.SEL.pauseAd);
+    const cardBtn = card ? card.closest('[data-uia="pause-ad"]')?.querySelector('button, [role="button"]') : null;
+    if (cardBtn instanceof HTMLElement) { cardBtn.click(); mark('assist:resume', 'via pause card button', { quiet: true }); return; }
+    const btn = document.querySelector(N.SEL.playButton);
+    if (btn instanceof HTMLElement) { btn.click(); mark('assist:resume', 'via control bar', { quiet: true }); return; }
+    U.safe(() => bridge.call('play'));
+    mark('assist:resume', 'via player API', { quiet: true });
+  }
+  const assist = MC_ASSIST.create({
+    pause: () => { U.safe(() => bridge.call('pause')); },
+    play: resumePlayback,
+    setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
+    getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
+  }, (msg) => mark('assist', msg));
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
     onPinyin(pinyin) { MC_SETTINGS.save({ pinyin }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
+    onAssist(patch) { MC_SETTINGS.save({ assist: /** @type {any} */ (patch) }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style }); overlay.setStyle(st.style); return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(st.style); assist.configure(st.assist); return st; });
   let lastLangsKey = '';
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style });
+    picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
     overlay.setStyle(st.style);
+    assist.configure(st.assist);
+    if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
     mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled} style=${JSON.stringify(st.style)}`, { quiet: true });
     const key = st.langs.join('|');
@@ -275,7 +301,23 @@
   const cueCache = new Map();
 
   /** @typedef {{begin: number, end: number, text: string, settings: string, norm?: string}} Cue */
-  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}, hans: boolean}} Line */
+  /** @typedef {{pick: any, cues: Cue[], raw: Cue[], cursor: {i: number}, hans: boolean}} Line */
+  const HAN_COUNT_RE = /\p{Script=Han}/gu;
+
+  /**
+   * Reading-time extension over the whole transcript: the Chinese line's cues linger into
+   * silence up to chars × secondsPerChar; the other line follows so the pair vanishes together.
+   * @param {Session} s
+   */
+  function applyExtension(s) {
+    const a = MC_SETTINGS.get().assist;
+    const driver = s.lines.find((l) => l && l.hans);
+    for (const l of s.lines) if (l) { l.cues = l.raw; l.cursor = { i: 0 }; }
+    if (!a.extend || !driver) return;
+    driver.cues = MC_SUBS.extendCues(driver.raw, (c) => (c.text.match(HAN_COUNT_RE) || []).length * a.secondsPerChar);
+    for (const l of s.lines) if (l && l !== driver) l.cues = MC_SUBS.alignEnds(l.raw, driver.cues);
+    s.lastKey = '';
+  }
   /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number, lastShown: {texts: string[], end: number} | null}} Session */
   /** While paused, keep the last caption up if it ended no more than this many seconds before the pause point. */
   const STICKY_S = 4;
@@ -305,6 +347,7 @@
     const lines = await Promise.all(st.langs.map((lang, i) => loadLine(movieId, rows, lang, i)));
     if (session !== s) return; // superseded while fetching
     s.lines = lines;
+    applyExtension(s);
     picker.setState({ resolved: lines.map((l) => (l ? l.pick.lang : null)) });
     if (!lines.some(Boolean)) {
       mark('session:empty', 'no usable track for any slot; overlay stays down');
@@ -351,7 +394,7 @@
       cueCache.set(key, cues);
       if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
     }
-    return { pick, cues, cursor: { i: 0 }, hans: /^zh(-hans)?$/i.test(String(pick.lang)) };
+    return { pick, cues, raw: cues, cursor: { i: 0 }, hans: /^zh(-hans)?$/i.test(String(pick.lang)) };
   }
 
   // ---- pinyin: load the dictionary when a Simplified line wants it -----------------------
@@ -376,6 +419,7 @@
     cancelAnimationFrame(session.raf);
     mark('session:stop', `movieId=${session.movieId} (${why})`);
     session = null;
+    assist.reset();
     overlay.detach();
     applyNativeVisibility();
   }
@@ -390,17 +434,22 @@
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
     const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled;
     let texts = s.lines.map(() => '');
+    let zhText = '';
+    let zhEnd = -Infinity;
     if (!hidden) {
       let end = -Infinity;
       texts = s.lines.map((l) => {
         if (!l) return '';
         const active = MC_SUBS.activeCues(l.cues, c.t, l.cursor);
         for (const x of active) end = Math.max(end, x.end);
-        return active.map((x) => x.text).join('\n');
+        const text = active.map((x) => x.text).join('\n');
+        if (l.hans && text) { zhText = text; for (const x of active) zhEnd = Math.max(zhEnd, x.end); }
+        return text;
       });
       if (texts.some(Boolean)) s.lastShown = { texts, end };
       else if (video.paused && s.lastShown && c.t >= s.lastShown.end - 0.5 && c.t - s.lastShown.end <= STICKY_S) texts = s.lastShown.texts; // reading time while paused
     }
+    assist.update({ t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh: zhText, end: zhEnd });
     const pinyin = MC_SETTINGS.get().pinyin && MC_PINYIN.isReady();
     const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
@@ -458,6 +507,7 @@
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyP') { const a = MC_SETTINGS.get().assist; MC_SETTINGS.save({ assist: { mode: a.mode === 'off' ? a.lastMode : 'off' } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   function sessionSummary() {
@@ -470,7 +520,8 @@
       cueChanges: session.cueChanges, overlayMounted: overlay.mounted, pickerMounted: picker.mounted, settings: st,
       clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
       showing: session.lines.map((l) => (l ? MC_SUBS.activeCues(l.cues, c.t, { i: l.cursor.i }).map((x) => x.text).join('\n') : '')),
-      pauseAdPresent, controlsVisible, clockStatus: clock.status(),
+      pauseAdPresent, controlsVisible, clockStatus: clock.status(), assist: assist.status(),
+      extended: session.lines.map((l) => (l ? l.cues.filter((c) => /** @type {any} */ (c).end0 != null).length : 0)),
     };
   }
 
@@ -526,17 +577,19 @@
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: any}} */
+    /** @type {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: any, assist?: any}} */
     const clean = {};
     if (Array.isArray(patch.langs)) clean.langs = patch.langs;
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
     if (typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
+    if (patch.assist && typeof patch.assist === 'object') clean.assist = patch.assist;
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });
   bridge.handle('sync', () => clock.status());
   bridge.handle('pinyin', (/** @type {string} */ text) => (MC_PINYIN.isReady() ? MC_PINYIN.describe(String(text)) : '(dictionary not loaded)'));
+  bridge.handle('assist', () => assist.status());
 
   // ---- boot --------------------------------------------------------------------------
 

@@ -206,6 +206,8 @@ var MC_NFLX = (() => {
     pauseAd: '[data-uia^="pause-ad"]',
     /** Ad-break markers inside the scrubber (only while controls are shown). */
     adMarkers: '[data-uia="ad-markers"]',
+    /** The control bar's play button (present while paused with controls showing). */
+    playButton: '[data-uia="control-play-pause-play"]',
   };
 
   /** Text that suggests ad UI ("Ad 1 of 3", "Advertisement"). Discovery heuristic only. */
@@ -797,12 +799,59 @@ var MC_SUBS = (() => {
     return out;
   }
 
+  /**
+   * Let each cue linger into following silence until it has been up at least `required(cue)`
+   * seconds, never past the next non-overlapping cue's start (minus `gap`). Deterministic over
+   * the whole list, so it holds under seeks. Returns new cue objects (`end0` keeps the
+   * original end); the input is untouched.
+   * @param {Cue[]} cues sorted by begin
+   * @param {(cue: Cue) => number} required seconds a cue should stay up
+   * @param {number} [gap]
+   * @returns {Array<Cue & {end0?: number}>}
+   */
+  function extendCues(cues, required, gap = 0.05) {
+    return cues.map((c, i) => {
+      const want = c.begin + required(c);
+      if (want <= c.end) return c;
+      let cap = Infinity;
+      for (let j = i + 1; j < cues.length; j++) {
+        if (cues[j].begin >= c.end) { cap = cues[j].begin - gap; break; }
+      }
+      const end = Math.min(want, cap);
+      return end > c.end ? { ...c, end, end0: c.end } : c;
+    });
+  }
+
+  /**
+   * Keep a partner line's cues up as long as the driver line's cues they overlap with (after
+   * extension), so the two lines vanish together. Capped by the partner's own next cue.
+   * @param {Cue[]} partner sorted by begin
+   * @param {Array<Cue & {end0?: number}>} driver sorted by begin, possibly extended
+   * @param {number} [gap]
+   * @returns {Array<Cue & {end0?: number}>}
+   */
+  function alignEnds(partner, driver, gap = 0.05) {
+    let k = 0;
+    return partner.map((c, i) => {
+      while (k < driver.length && (driver[k].end0 ?? driver[k].end) <= c.begin) k++;
+      let target = c.end;
+      for (let j = k; j < driver.length && driver[j].begin < c.end; j++) target = Math.max(target, driver[j].end);
+      if (target <= c.end) return c;
+      let cap = Infinity;
+      for (let j = i + 1; j < partner.length; j++) {
+        if (partner[j].begin >= c.end) { cap = partner[j].begin - gap; break; }
+      }
+      const end = Math.min(target, cap);
+      return end > c.end ? { ...c, end, end0: c.end } : c;
+    });
+  }
+
   /** Text form used to match a native cue against parsed cues: no whitespace, no punctuation, lower case. @param {string} t */
   function normalizeForMatch(t) {
     return t.toLowerCase().replace(/[\s ‎‏]+/g, '').replace(/[.,!?;:'"“”‘’\-–—…()\[\]♪]/g, '');
   }
 
-  return { parseTimestamp, parseWebVTT, activeCues, stripTags, decodeEntities, normalizeForMatch };
+  return { parseTimestamp, parseWebVTT, activeCues, stripTags, decodeEntities, normalizeForMatch, extendCues, alignEnds };
 })();
 
 // ===== src/clock.js =====
@@ -1157,14 +1206,19 @@ var MC_SETTINGS = (() => {
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line;
    * rubyUnder: pinyin below the characters (true) or above them (false).
    */
-  /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style}} Settings */
+  /** @typedef {{mode: 'off' | 'pause' | 'slow' | 'slowpause', secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean, lastMode: 'pause' | 'slow' | 'slowpause'}} Assist */
+  /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
   const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
   /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
-  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE };
+  /** @type {Assist} */
+  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true, lastMode: 'slowpause' };
+  const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0], minRate: [0.3, 1.0] };
+  const ASSIST_MODES = ['off', 'pause', 'slow', 'slowpause'];
+  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -1197,13 +1251,22 @@ var MC_SETTINGS = (() => {
     st.backdrop = st.backdrop === true;
     st.rubyUnder = st.rubyUnder !== false;
     s.style = st;
+    const a = { ...DEFAULT_ASSIST, ...(s.assist && typeof s.assist === 'object' ? s.assist : {}) };
+    a.mode = ASSIST_MODES.includes(a.mode) ? a.mode : 'off';
+    a.lastMode = ASSIST_MODES.includes(a.lastMode) && a.lastMode !== 'off' ? a.lastMode : DEFAULT_ASSIST.lastMode;
+    if (a.mode !== 'off') a.lastMode = a.mode;
+    a.secondsPerChar = clamp(a.secondsPerChar, ASSIST_RANGES.secondsPerChar, DEFAULT_ASSIST.secondsPerChar);
+    a.minRate = clamp(a.minRate, ASSIST_RANGES.minRate, DEFAULT_ASSIST.minRate);
+    a.autoResume = a.autoResume !== false;
+    a.extend = a.extend !== false;
+    s.assist = a;
     return s;
   }
 
-  /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: Partial<Style>}} patch @returns {Promise<Settings>} */
+  /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
-    cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) } });
+    cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) }, assist: { ...cur.assist, ...(patch.assist || {}) } });
     try { await chrome.storage.local.set({ [KEY]: cache }); } catch (err) { MC_UTIL.warn('settings: save failed:', err); }
     for (const fn of listeners) { try { fn(cache); } catch (err) { MC_UTIL.warn('settings listener threw:', err); } }
     return cache;
@@ -1215,7 +1278,7 @@ var MC_SETTINGS = (() => {
   /** @param {(s: Settings) => void} fn */
   function onChange(fn) { listeners.push(fn); }
 
-  return { DEFAULTS, DEFAULT_STYLE, RANGES, load, save, get, onChange, normalize };
+  return { DEFAULTS, DEFAULT_STYLE, RANGES, DEFAULT_ASSIST, ASSIST_RANGES, ASSIST_MODES, load, save, get, onChange, normalize };
 })();
 
 // ===== src/pinyin.js =====
@@ -1346,6 +1409,145 @@ var MC_PINYIN = (() => {
   return { use, load, isReady, annotate, describe, get size() { return dict ? { words: Object.keys(dict.words).length, chars: Object.keys(dict.chars).length } : null; } };
 })();
 
+// ===== src/assist.js =====
+// @ts-check
+/*
+ * assist.js — reading assist: give each Chinese caption a minimum on-screen time.
+ *
+ * Reading time = Han characters in the caption × secondsPerChar, measured in wall time
+ * from the caption's first frame. Modes:
+ *   pause      — stop just before the caption would vanish; resume when the time is met.
+ *   slow       — lower the playback rate for this caption so it lasts long enough
+ *                (floored at minRate), restore the rate when it ends.
+ *   slowpause  — slow first, then pause for whatever the floor could not cover.
+ * Only pauses we started are resumed. A manual pause, a manual resume, a seek, or an ad
+ * cancels the current caption's plan. Everything here is driven from the render loop.
+ */
+var MC_ASSIST = (() => {
+  const HAN_RE = /\p{Script=Han}/gu;
+  /** Act this many content seconds before the caption's end (≈ 7 frames). */
+  const EPS = 0.12;
+  /** Don't bother pausing for less than this. */
+  const MIN_PAUSE_S = 0.2;
+
+  /** @typedef {{mode: 'off' | 'pause' | 'slow' | 'slowpause', secondsPerChar: number, minRate: number, autoResume: boolean}} Config */
+  /** @typedef {{key: string, chars: number, required: number, startWall: number, end: number, baseRate: number, slowed: number | null, pausedByUs: boolean, acted: boolean, resumeHandle: number}} Caption */
+
+  /**
+   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number}} actions
+   * @param {(msg: string) => void} log
+   */
+  function create(actions, log) {
+    /** @type {Config} */
+    let cfg = { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true };
+    /** @type {Caption | null} */
+    let cap = null;
+    let expectingPause = false;
+    const stats = { captions: 0, slowed: 0, paused: 0, resumed: 0, cancelled: 0 };
+
+    /** @param {Partial<Config>} c */
+    function configure(c) {
+      cfg = { ...cfg, ...c };
+      if (cfg.mode === 'off') reset();
+    }
+
+    /** Drop the current caption's plan: restore the rate, cancel a pending resume. Never resumes a pause. */
+    function reset() {
+      if (!cap) return;
+      if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* player gone */ } }
+      if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
+      cap = null;
+    }
+
+    /**
+     * One frame. `zh` is the Chinese caption text ('' when none), `end` its content end time.
+     * @param {{t: number, wall: number, paused: boolean, inAd: boolean, zh: string, end: number}} f
+     */
+    function update(f) {
+      if (cfg.mode === 'off') return;
+      if (f.inAd || !f.zh) {
+        if (cap && !cap.pausedByUs) reset();
+        return;
+      }
+      if (cap && cap.pausedByUs) return; // holding for the reader; the clock is frozen anyway
+      if (!cap || cap.key !== f.zh) {
+        reset();
+        const chars = (f.zh.match(HAN_RE) || []).length;
+        cap = { key: f.zh, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, baseRate: 1, slowed: null, pausedByUs: false, acted: false, resumeHandle: 0 };
+        stats.captions++;
+        if (cfg.mode !== 'pause' && !f.paused) {
+          const natural = f.end - f.t; // content seconds left ≈ wall seconds at the base rate
+          if (natural > 0.05 && natural < cap.required) {
+            const base = Number(actions.getRate()) || 1;
+            cap.baseRate = base;
+            const rate = Math.max(cfg.minRate, natural / cap.required) * base;
+            if (rate < base - 0.01) {
+              actions.setRate(Math.round(rate * 100) / 100);
+              cap.slowed = rate;
+              stats.slowed++;
+            }
+          }
+        }
+        return;
+      }
+      if (cap.acted || f.paused) return;
+      if (f.t < cap.end - EPS) return;
+      // The caption is about to vanish.
+      cap.acted = true;
+      if (cap.slowed != null) { actions.setRate(cap.baseRate); cap.slowed = null; }
+      const elapsed = (f.wall - cap.startWall) / 1000;
+      const needed = cap.required - elapsed;
+      if (needed < MIN_PAUSE_S || cfg.mode === 'slow') return;
+      cap.pausedByUs = true;
+      expectingPause = true;
+      stats.paused++;
+      actions.pause();
+      log(`assist: paused ${needed.toFixed(1)}s for ${cap.chars} chars "${cap.key.slice(0, 24)}"`);
+      if (cfg.autoResume) cap.resumeHandle = window.setTimeout(() => resume('reading time met'), needed * 1000);
+    }
+
+    /** @param {string} why */
+    function resume(why) {
+      if (!cap || !cap.pausedByUs) return;
+      cap.pausedByUs = false;
+      cap.resumeHandle = 0;
+      stats.resumed++;
+      log(`assist: resumed (${why})`);
+      actions.play();
+    }
+
+    /** video 'pause' event: ours, or the user's. */
+    function onVideoPause() {
+      if (expectingPause) { expectingPause = false; return; }
+      if (cap) { // manual pause: leave it alone, and don't act again on this caption
+        if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* ignore */ } cap.slowed = null; }
+        if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
+        cap.pausedByUs = false;
+        cap.acted = true;
+        stats.cancelled++;
+      }
+    }
+
+    /** video 'play' event: the user (or we) resumed. */
+    function onVideoPlay() {
+      if (cap && cap.pausedByUs) {
+        if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
+        cap.pausedByUs = false;
+        cap.resumeHandle = 0;
+        stats.cancelled++;
+      }
+    }
+
+    function status() {
+      return { mode: cfg.mode, secondsPerChar: cfg.secondsPerChar, minRate: cfg.minRate, autoResume: cfg.autoResume, stats, current: cap ? { chars: cap.chars, required: +cap.required.toFixed(2), slowed: cap.slowed, pausedByUs: cap.pausedByUs, acted: cap.acted } : null };
+    }
+
+    return { configure, update, reset, resume, onVideoPause, onVideoPlay, status, get holding() { return !!(cap && cap.pausedByUs); } };
+  }
+
+  return { create };
+})();
+
 // ===== src/picker.js =====
 // @ts-check
 /*
@@ -1377,7 +1579,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, minRate?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1390,8 +1592,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}}} */
-    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true } };
+    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean}}} */
+    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1434,7 +1636,7 @@ var MC_PICKER = (() => {
       renderPanel();
     }
 
-    /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any}} st */
+    /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any, assist?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -1588,6 +1790,40 @@ var MC_PICKER = (() => {
       bd.appendChild(el('Backdrop behind lines', 'flex:1;'));
       panel.appendChild(bd);
 
+      // ---- reading assist ----
+      panel.appendChild(el('Reading assist', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;'));
+      const as = state.assist;
+      const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes'], ['slow', 'Slow the caption down'], ['slowpause', 'Slow, then pause if still needed']];
+      for (const [value, label] of modes) {
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;';
+        const r = document.createElement('input');
+        r.type = 'radio'; r.name = 'multicap-assist-mode'; r.checked = as.mode === value; r.style.cssText = RADIO_CSS + 'justify-self:start;';
+        r.addEventListener('change', () => handlers.onAssist({ mode: value }));
+        row.appendChild(r);
+        row.appendChild(el(label, 'flex:1;'));
+        panel.appendChild(row);
+      }
+      slider('Per character', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + 's', (v) => handlers.onAssist({ secondsPerChar: v }));
+      slider('Slowest speed', as.minRate, MC_SETTINGS.ASSIST_RANGES.minRate, 0.05, (v) => v.toFixed(2) + 'x', (v) => handlers.onAssist({ minRate: v }));
+      const ex = document.createElement('label');
+      ex.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const exc = document.createElement('input');
+      exc.type = 'checkbox'; exc.checked = as.extend; exc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      exc.addEventListener('change', () => handlers.onAssist({ extend: exc.checked }));
+      ex.appendChild(exc);
+      ex.appendChild(el('Keep captions up into silence (any mode)', 'flex:1;'));
+      panel.appendChild(ex);
+      const ar = document.createElement('label');
+      ar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const arc = document.createElement('input');
+      arc.type = 'checkbox'; arc.checked = as.autoResume; arc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      arc.addEventListener('change', () => handlers.onAssist({ autoResume: arc.checked }));
+      ar.appendChild(arc);
+      ar.appendChild(el('Resume automatically after the reading time', 'flex:1;'));
+      ar.appendChild(el('Ctrl+Shift+P', 'color:rgba(255,255,255,.45);font-size:12px;'));
+      panel.appendChild(ar);
+
       const foot = document.createElement('label');
       foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';
       const cb = document.createElement('input');
@@ -1688,13 +1924,16 @@ var MC_PICKER = (() => {
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
     clock.onSeek();
+    assist.reset();
     if (session) overlay.attach(v, SLOTS, overlayHost());
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
         let extra = '';
         if (ev === 'durationchange' || ev === 'loadedmetadata') extra = '  ' + durationVsManifest(v);
-        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); if (session) session.lastShown = null; }
+        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); if (session) session.lastShown = null; assist.reset(); }
+        else if (ev === 'pause') assist.onVideoPause();
+        else if (ev === 'play') assist.onVideoPlay();
         else if (ev === 'seeked') extra = '  ' + clockLine();
         mark('video:' + ev, videoDesc(v) + extra);
       });
@@ -1862,17 +2101,40 @@ var MC_PICKER = (() => {
   const SLOTS = 2;
   const clock = MC_CLOCK.create(bridge, () => video, () => domAd);
   const overlay = MC_OVERLAY.create();
+
+  /**
+   * Resume playback through Netflix's own controls when they are on screen (resuming through
+   * the player API while the pause card is up leaves the UI stuck on the card), else the API.
+   */
+  function resumePlayback() {
+    const card = document.querySelector(N.SEL.pauseAd);
+    const cardBtn = card ? card.closest('[data-uia="pause-ad"]')?.querySelector('button, [role="button"]') : null;
+    if (cardBtn instanceof HTMLElement) { cardBtn.click(); mark('assist:resume', 'via pause card button', { quiet: true }); return; }
+    const btn = document.querySelector(N.SEL.playButton);
+    if (btn instanceof HTMLElement) { btn.click(); mark('assist:resume', 'via control bar', { quiet: true }); return; }
+    U.safe(() => bridge.call('play'));
+    mark('assist:resume', 'via player API', { quiet: true });
+  }
+  const assist = MC_ASSIST.create({
+    pause: () => { U.safe(() => bridge.call('pause')); },
+    play: resumePlayback,
+    setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
+    getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
+  }, (msg) => mark('assist', msg));
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
     onPinyin(pinyin) { MC_SETTINGS.save({ pinyin }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
+    onAssist(patch) { MC_SETTINGS.save({ assist: /** @type {any} */ (patch) }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style }); overlay.setStyle(st.style); return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(st.style); assist.configure(st.assist); return st; });
   let lastLangsKey = '';
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style });
+    picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
     overlay.setStyle(st.style);
+    assist.configure(st.assist);
+    if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
     mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled} style=${JSON.stringify(st.style)}`, { quiet: true });
     const key = st.langs.join('|');
@@ -1885,7 +2147,23 @@ var MC_PICKER = (() => {
   const cueCache = new Map();
 
   /** @typedef {{begin: number, end: number, text: string, settings: string, norm?: string}} Cue */
-  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}, hans: boolean}} Line */
+  /** @typedef {{pick: any, cues: Cue[], raw: Cue[], cursor: {i: number}, hans: boolean}} Line */
+  const HAN_COUNT_RE = /\p{Script=Han}/gu;
+
+  /**
+   * Reading-time extension over the whole transcript: the Chinese line's cues linger into
+   * silence up to chars × secondsPerChar; the other line follows so the pair vanishes together.
+   * @param {Session} s
+   */
+  function applyExtension(s) {
+    const a = MC_SETTINGS.get().assist;
+    const driver = s.lines.find((l) => l && l.hans);
+    for (const l of s.lines) if (l) { l.cues = l.raw; l.cursor = { i: 0 }; }
+    if (!a.extend || !driver) return;
+    driver.cues = MC_SUBS.extendCues(driver.raw, (c) => (c.text.match(HAN_COUNT_RE) || []).length * a.secondsPerChar);
+    for (const l of s.lines) if (l && l !== driver) l.cues = MC_SUBS.alignEnds(l.raw, driver.cues);
+    s.lastKey = '';
+  }
   /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number, lastShown: {texts: string[], end: number} | null}} Session */
   /** While paused, keep the last caption up if it ended no more than this many seconds before the pause point. */
   const STICKY_S = 4;
@@ -1915,6 +2193,7 @@ var MC_PICKER = (() => {
     const lines = await Promise.all(st.langs.map((lang, i) => loadLine(movieId, rows, lang, i)));
     if (session !== s) return; // superseded while fetching
     s.lines = lines;
+    applyExtension(s);
     picker.setState({ resolved: lines.map((l) => (l ? l.pick.lang : null)) });
     if (!lines.some(Boolean)) {
       mark('session:empty', 'no usable track for any slot; overlay stays down');
@@ -1961,7 +2240,7 @@ var MC_PICKER = (() => {
       cueCache.set(key, cues);
       if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
     }
-    return { pick, cues, cursor: { i: 0 }, hans: /^zh(-hans)?$/i.test(String(pick.lang)) };
+    return { pick, cues, raw: cues, cursor: { i: 0 }, hans: /^zh(-hans)?$/i.test(String(pick.lang)) };
   }
 
   // ---- pinyin: load the dictionary when a Simplified line wants it -----------------------
@@ -1986,6 +2265,7 @@ var MC_PICKER = (() => {
     cancelAnimationFrame(session.raf);
     mark('session:stop', `movieId=${session.movieId} (${why})`);
     session = null;
+    assist.reset();
     overlay.detach();
     applyNativeVisibility();
   }
@@ -2000,17 +2280,22 @@ var MC_PICKER = (() => {
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
     const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled;
     let texts = s.lines.map(() => '');
+    let zhText = '';
+    let zhEnd = -Infinity;
     if (!hidden) {
       let end = -Infinity;
       texts = s.lines.map((l) => {
         if (!l) return '';
         const active = MC_SUBS.activeCues(l.cues, c.t, l.cursor);
         for (const x of active) end = Math.max(end, x.end);
-        return active.map((x) => x.text).join('\n');
+        const text = active.map((x) => x.text).join('\n');
+        if (l.hans && text) { zhText = text; for (const x of active) zhEnd = Math.max(zhEnd, x.end); }
+        return text;
       });
       if (texts.some(Boolean)) s.lastShown = { texts, end };
       else if (video.paused && s.lastShown && c.t >= s.lastShown.end - 0.5 && c.t - s.lastShown.end <= STICKY_S) texts = s.lastShown.texts; // reading time while paused
     }
+    assist.update({ t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh: zhText, end: zhEnd });
     const pinyin = MC_SETTINGS.get().pinyin && MC_PINYIN.isReady();
     const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
@@ -2068,6 +2353,7 @@ var MC_PICKER = (() => {
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyP') { const a = MC_SETTINGS.get().assist; MC_SETTINGS.save({ assist: { mode: a.mode === 'off' ? a.lastMode : 'off' } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   function sessionSummary() {
@@ -2080,7 +2366,8 @@ var MC_PICKER = (() => {
       cueChanges: session.cueChanges, overlayMounted: overlay.mounted, pickerMounted: picker.mounted, settings: st,
       clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
       showing: session.lines.map((l) => (l ? MC_SUBS.activeCues(l.cues, c.t, { i: l.cursor.i }).map((x) => x.text).join('\n') : '')),
-      pauseAdPresent, controlsVisible, clockStatus: clock.status(),
+      pauseAdPresent, controlsVisible, clockStatus: clock.status(), assist: assist.status(),
+      extended: session.lines.map((l) => (l ? l.cues.filter((c) => /** @type {any} */ (c).end0 != null).length : 0)),
     };
   }
 
@@ -2136,17 +2423,19 @@ var MC_PICKER = (() => {
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: any}} */
+    /** @type {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: any, assist?: any}} */
     const clean = {};
     if (Array.isArray(patch.langs)) clean.langs = patch.langs;
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
     if (typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
+    if (patch.assist && typeof patch.assist === 'object') clean.assist = patch.assist;
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });
   bridge.handle('sync', () => clock.status());
   bridge.handle('pinyin', (/** @type {string} */ text) => (MC_PINYIN.isReady() ? MC_PINYIN.describe(String(text)) : '(dictionary not loaded)'));
+  bridge.handle('assist', () => assist.status());
 
   // ---- boot --------------------------------------------------------------------------
 
