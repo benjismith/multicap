@@ -15,15 +15,16 @@ titles. `Ctrl+Shift+H` hides/shows the overlay. Verified live on
 the ads plan 2026-09-07 (see `docs/phase0-findings.md`).
 
 **Reading assist.** Each Chinese caption gets a reading time of characters ×
-seconds-per-character. Two layers, both in the panel: captions are extended
-into following silence (whole-transcript, so it holds under seeks; on by
-default), and optionally the player pauses just before a caption would vanish,
-resuming when the time is met, with a bar under the caption draining meanwhile.
-Only pauses the extension started are ever resumed; a manual pause, resume,
-seek, or ad cancels the plan. `Ctrl+Shift+P` toggles the pause mode. (A
-slowed-playback mode was tried and dropped: resampled audio sounds bad.)
+seconds-per-character. Three rows in the panel: *Extend into silence* (Off/On,
+on by default: captions linger after their end, whole-transcript so it holds
+under seeks), *Pause to read* (Off / Timed / Manual: hold the caption just
+before it would vanish, then resume after the reading time or wait for Space;
+a bar under the caption drains meanwhile), and *Reading time*. Only pauses the
+extension started are ever resumed; a manual pause, resume, seek, or ad cancels
+the plan. `Ctrl+Shift+P` toggles pausing. (A slowed-playback mode was tried and
+dropped: resampled audio sounds bad.)
 
-**Pinyin.** The Simplified line gets per-character ruby with tone marks, from
+**Pinyin.** None / Above / Below in the panel. The Simplified line gets per-character ruby with tone marks, from
 `data/pinyin.json`: 80k words/phrases and 5.1k characters built by
 `npm run build:pinyin` from the DuiDuiDui records corpus (word readings are
 cross-validated against the sentences that contain them; `data/pinyin-suspects.txt`
