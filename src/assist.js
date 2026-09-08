@@ -58,10 +58,11 @@ var MC_ASSIST = (() => {
         return;
       }
       if (cap && cap.pausedByUs) return; // holding for the reader; the clock is frozen anyway
-      if (!cap || cap.key !== f.zh) {
+      const key = f.zh + '@' + f.end; // text alone would merge back-to-back identical captions
+      if (!cap || cap.key !== key) {
         reset();
         const chars = (f.zh.match(HAN_RE) || []).length;
-        cap = { key: f.zh, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, baseRate: 1, slowed: null, pausedByUs: false, acted: false, resumeHandle: 0 };
+        cap = { key, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, baseRate: 1, slowed: null, pausedByUs: false, acted: false, resumeHandle: 0 };
         stats.captions++;
         if (cfg.mode !== 'pause' && !f.paused) {
           const natural = f.end - f.t; // content seconds left ≈ wall seconds at the base rate
@@ -90,7 +91,7 @@ var MC_ASSIST = (() => {
       expectingPause = true;
       stats.paused++;
       actions.pause();
-      log(`assist: paused ${needed.toFixed(1)}s for ${cap.chars} chars "${cap.key.slice(0, 24)}"`);
+      log(`assist: paused ${needed.toFixed(1)}s for ${cap.chars} chars "${f.zh.slice(0, 24)}"`);
       if (cfg.autoResume) cap.resumeHandle = window.setTimeout(() => resume('reading time met'), needed * 1000);
     }
 
