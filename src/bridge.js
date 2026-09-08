@@ -10,6 +10,7 @@
  * Event names:  multicap:<destination>:call | :reply | :event
  * Uses the pristine JSON functions captured by util.js (page-hook.js patches JSON later).
  */
+// `var`: shared with the entry file that build.js concatenates after this one.
 var MC_BRIDGE = (() => {
   const NS = 'multicap:';
 
@@ -88,5 +89,3 @@ var MC_BRIDGE = (() => {
 
   return { create };
 })();
-// Publish explicitly: in the isolated world, later files did not see this file's top-level bindings.
-globalThis.MC_BRIDGE = MC_BRIDGE;

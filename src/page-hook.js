@@ -13,7 +13,7 @@
  */
 (() => {
   if (typeof MC_UTIL === 'undefined' || typeof MC_NFLX === 'undefined' || typeof MC_BRIDGE === 'undefined') {
-    console.error('[multicap] shared modules (netflix.js / util.js / bridge.js) did not load before page-hook.js — check the js order in manifest.json', 'page-hook.js');
+    console.error('[multicap] shared modules missing in page-hook.js — dist/ is stale or mis-built; run: npm run build');
     return;
   }
   const U = MC_UTIL;

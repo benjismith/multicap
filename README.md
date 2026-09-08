@@ -12,23 +12,30 @@ the ad schema can be *discovered* rather than guessed.
 
 | File | World | Purpose |
 | --- | --- | --- |
-| `manifest.json` | | MV3 manifest. Two content scripts on `*.netflix.com`, both at `document_start`. |
+| `manifest.json` | | MV3 manifest. Two content scripts on `*.netflix.com`, both at `document_start`, one generated file each. |
+| `build.js` | | Concatenates `src/` into `dist/page.js` (MAIN) and `dist/ext.js` (isolated). No dependencies. |
 | `src/netflix.js` | both | **Every Netflix-specific assumption**: schema predicates, selectors, profile names, player-API path. When Netflix changes, fix it here. |
 | `src/util.js` | both | Logging, ring buffers, object-shape dumps. Captures pristine `JSON.*` before the hooks go in. |
 | `src/bridge.js` | both | Synchronous MAIN ⇄ isolated-world messaging over `CustomEvent`s with JSON-string payloads. |
 | `src/page-hook.js` | MAIN | `JSON.parse` hook (capture manifest), `JSON.stringify` hook (ask for WebVTT + all tracks), player-API probe, `__multicap` console helpers. |
 | `src/content.js` | isolated | Watches `<video>`, the player DOM (`data-uia` diffs, ad-word text), the native subtitle layer, and the URL; stamps everything with media time. |
 
-No build step. `npm install && npm run typecheck` runs `tsc` in check-only mode
-over the `// @ts-check` JSDoc'd sources; the extension loads `src/` as-is.
+Chrome injects a file listed in two `content_scripts` entries only once per
+frame (de-duplicated by path, ignoring the world), so shared files cannot be
+listed in both worlds. `npm run build` therefore concatenates `src/` into one
+file per world under `dist/`, which is what the manifest loads. `npm run watch`
+rebuilds on every change; `npm run typecheck` runs `tsc` in check-only mode over
+the `// @ts-check` JSDoc'd sources. `dist/` is committed so a fresh clone loads
+without building. Edit `src/`, never `dist/`.
 
 ## Install
 
-1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick this folder.
-2. Open DevTools on a Netflix tab **before** starting playback (the hooks run at
+1. `npm install && npm run build` (once; `dist/` is also committed).
+2. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick this folder. After any edit: `npm run build`, then the reload icon on the multicap card.
+3. Open DevTools on a Netflix tab **before** starting playback (the hooks run at
    `document_start`, but the console only keeps what it saw while open). Turn on
    **Preserve log** in the console settings.
-3. You should see `[multicap] page hook installed` and `[multicap] phase-0
+4. You should see `[multicap] page hook installed` and `[multicap] phase-0
    instrumentation active`. If the second one instead says the page hook is not
    reachable, the MAIN-world script didn't run.
 

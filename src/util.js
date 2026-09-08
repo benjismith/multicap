@@ -6,6 +6,7 @@
  * JSON.parse / JSON.stringify afterwards, and nothing in here must re-enter
  * those hooks.
  */
+// `var`: shared with the entry file that build.js concatenates after this one.
 var MC_UTIL = (() => {
   const jsonStringify = JSON.stringify.bind(JSON);
   const jsonParse = JSON.parse.bind(JSON);
@@ -213,5 +214,3 @@ var MC_UTIL = (() => {
 
   return { jsonStringify, jsonParse, log, warn, muted, group, safe, ring, typeOf, sample, safeJson, summarize, skeleton, interest, table, fmtSec };
 })();
-// Publish explicitly: in the isolated world, later files did not see this file's top-level bindings.
-globalThis.MC_UTIL = MC_UTIL;

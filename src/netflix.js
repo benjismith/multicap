@@ -11,6 +11,7 @@
  * Nothing here should throw. Callers treat null / [] as "assumption failed"
  * and log loudly.
  */
+// `var`: shared with the entry file that build.js concatenates after this one.
 var MC_NFLX = (() => {
   /** Subtitle profile that makes Netflix serve WebVTT instead of TTML/DFXP. */
   const WEBVTT_PROFILE = 'webvtt-lssdh-ios8';
@@ -207,5 +208,3 @@ var MC_NFLX = (() => {
     playerApi, pickWatchSession, watchIdFromUrl,
   };
 })();
-// Publish explicitly: in the isolated world, later files did not see this file's top-level bindings.
-globalThis.MC_NFLX = MC_NFLX;
