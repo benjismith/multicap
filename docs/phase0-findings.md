@@ -227,3 +227,13 @@ mid-roll ahead.
   meanings, not readings (好's rank-1 sense is hào).
 - **Pause behaviour:** the last caption stays up while paused if it ended
   within 4 s of the pause point; seeks and new video elements clear it.
+- **Frame cadence:** the isolated-world `requestAnimationFrame` loop ran at
+  roughly 10 fps on Benji's machine while Netflix plays (frame gap ~100 ms),
+  even with the tab visible. Anything that must happen at a precise content
+  time (the reading assist's pause before a caption vanishes) is scheduled
+  with a wall-clock timer and confirmed against a fresh clock sample, not
+  left to the loop. Rendering itself is fine at that rate.
+- **Reading assist verified live** (2026-09-08, 1 s/char, 0.3x floor): pauses
+  land just before each caption would vanish, resume on time through the
+  player API or Netflix's control bar, and a manual pause is never resumed by
+  the extension.
