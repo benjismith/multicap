@@ -78,7 +78,7 @@
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
     clock.onSeek();
-    if (session) overlay.attach(v, SLOTS);
+    if (session) overlay.attach(v, SLOTS, overlayHost());
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
@@ -314,7 +314,7 @@
     }
     mark('session:ready', lines.map((l, i) => (l ? `slot${i}=${l.pick.lang} "${l.pick.name}" ${l.cues.length} cues` : `slot${i}=off`)).join('; '));
     ensurePinyin(s);
-    if (video) overlay.attach(video, SLOTS);
+    if (video) overlay.attach(video, SLOTS, overlayHost());
     applyNativeVisibility();
     s.raf = requestAnimationFrame(frame);
   }
@@ -385,7 +385,7 @@
     if (!s || s.stopped) return;
     s.raf = requestAnimationFrame(frame);
     if (!video || !video.isConnected) return;
-    if (!overlay.mounted) overlay.attach(video, SLOTS);
+    if (!overlay.mounted) overlay.attach(video, SLOTS, overlayHost());
     const c = clock.now();
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
     const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled;
@@ -409,6 +409,11 @@
     const annos = s.lines.map((l, i) => (pinyin && l && l.hans && texts[i] ? MC_PINYIN.annotate(texts[i]) : null));
     overlay.render(texts, !hidden, annos);
     if (texts.some(Boolean)) mark('cue', `content=${c.t.toFixed(3)} ${texts.map((t) => JSON.stringify(t.slice(0, 40))).join(' / ')}`, { quiet: true });
+  }
+
+  /** Where the overlay mounts: the player view (beside Netflix's pause card), if present. */
+  function overlayHost() {
+    return /** @type {HTMLElement | null} */ (document.querySelector(N.SEL.playerView));
   }
 
   /**
