@@ -2,9 +2,8 @@
 /*
  * settings.js — persisted preferences (chrome.storage.local, isolated world only).
  *
- * `langs` are the two slots of the overlay, top then bottom, as BCP-47 tags
- * (null = slot off). The track actually used for a slot is resolved per title
- * by MC_NFLX.pickTrack(), so a preference carries across titles.
+ * The two lines are fixed: English on top, Simplified Chinese below (see
+ * content.js). Only presentation and the reading assist are configurable.
  */
 var MC_SETTINGS = (() => {
   /**
@@ -14,7 +13,7 @@ var MC_SETTINGS = (() => {
    * rubyUnder: pinyin below the characters (true) or above them (false).
    */
   /** @typedef {{mode: 'off' | 'pause', secondsPerChar: number, autoResume: boolean, extend: boolean}} Assist */
-  /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style, assist: Assist}} Settings */
+  /** @typedef {{enabled: boolean, pinyin: boolean, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
   const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
@@ -25,7 +24,7 @@ var MC_SETTINGS = (() => {
   const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true };
   const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
   const ASSIST_MODES = ['off', 'pause'];
-  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
+  const DEFAULTS = { enabled: true, pinyin: true, style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -46,8 +45,7 @@ var MC_SETTINGS = (() => {
   /** @param {any} raw @returns {Settings} */
   function normalize(raw) {
     const s = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
-    if (!Array.isArray(s.langs)) s.langs = DEFAULTS.langs.slice();
-    s.langs = [0, 1].map((i) => (typeof s.langs[i] === 'string' && s.langs[i] ? s.langs[i] : null));
+    delete s.langs; // language slots existed in earlier builds
     s.enabled = s.enabled !== false;
     s.pinyin = s.pinyin !== false;
     const st = { ...DEFAULT_STYLE, ...(s.style && typeof s.style === 'object' ? s.style : {}) };
@@ -69,7 +67,7 @@ var MC_SETTINGS = (() => {
     return s;
   }
 
-  /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
+  /** @param {{enabled?: boolean, pinyin?: boolean, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
     cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) }, assist: { ...cur.assist, ...(patch.assist || {}) } });

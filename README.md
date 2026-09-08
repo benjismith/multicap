@@ -5,12 +5,13 @@ unpacked. Built to survive an **ad-supported plan** with server-side-stitched
 ads, which shift `video.currentTime` away from subtitle time.
 
 **Status: Phases 0–4 done, pinyin ruby added.** English over Simplified
-Chinese by default, rendered from the player's own content clock (with
+Chinese (a fixed pair; Traditional stands in when a title has no Simplified
+track), rendered from the player's own content clock (with
 native-cue calibration as the fallback clock and the DOM ad badge as the
 fallback ad flag), blanked during ads, rebuilt on every episode change. The
 picker (pill in the top-right while the controls show, or `Ctrl+Shift+M`)
-persists the two slots, size/height/per-line/backdrop styling, and the pinyin
-toggle across titles. `Ctrl+Shift+H` hides/shows the overlay. Verified live on
+persists size/height/per-line/backdrop styling and the pinyin toggle across
+titles. `Ctrl+Shift+H` hides/shows the overlay. Verified live on
 the ads plan 2026-09-07 (see `docs/phase0-findings.md`).
 
 **Reading assist.** Each Chinese caption gets a reading time of characters ×
@@ -43,10 +44,10 @@ order. Traditional lines are not annotated.
 | `src/subtitles.js` | isolated | WebVTT parser for Netflix's files, cursor-based active-cue lookup, text normalization for cue matching. |
 | `src/clock.js` | isolated | Content time + in-ad flag from the player (via the bridge), `video.currentTime` as a warned fallback. |
 | `src/overlay.js` | isolated | The subtitle layer: mounted next to `<video>`, CSSOM-styled, sized from the picture box. |
-| `src/settings.js` | isolated | Two language slots + enabled flag in `chrome.storage.local`. |
+| `src/settings.js` | isolated | Presentation and reading-assist preferences in `chrome.storage.local`. |
 | `src/pinyin.js` | isolated | Dictionary loader and annotator (word → syllables per character). |
 | `src/assist.js` | isolated | Reading assist: per-caption pause plan with timer-driven timing. |
-| `src/picker.js` | isolated | The pill and the track/style panel, mounted inside the player view (survives fullscreen). |
+| `src/picker.js` | isolated | The pill and the settings panel, mounted inside the player view (survives fullscreen). |
 | `tools/build-pinyin.js` | | Builds `data/pinyin.json` from the DuiDuiDui records directory. |
 | `src/content.js` | isolated | Session per manifest (resolve slots → fetch → parse → render on rAF), picker wiring, shortcuts, plus the Phase 0 instrumentation: `<video>` events, `data-uia` diffs, ad text, native cues, URL changes. |
 

@@ -251,8 +251,9 @@
 
   // ---- session: tracks → cues → overlay, driven by the content clock ------------------
 
-  /** Two slots: top line, bottom line. Which language fills each is a persisted setting. */
-  const SLOTS = 2;
+  /** The two lines, fixed: English on top, Simplified Chinese below. pickTrack() falls back to a base-language match (zh-Hant) when a title lacks zh-Hans. */
+  const LANGS = ['en', 'zh-Hans'];
+  const SLOTS = LANGS.length;
   const clock = MC_CLOCK.create(bridge, () => video, () => domAd);
   const overlay = MC_OVERLAY.create();
 
@@ -337,24 +338,19 @@
     return { t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh, end };
   }
   const picker = MC_PICKER.create({
-    onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
     onPinyin(pinyin) { MC_SETTINGS.save({ pinyin }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
     onAssist(patch) { MC_SETTINGS.save({ assist: /** @type {any} */ (patch) }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(st.style); assist.configure(st.assist); return st; });
-  let lastLangsKey = '';
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(st.style); assist.configure(st.assist); return st; });
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
+    picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
     overlay.setStyle(st.style);
     assist.configure(st.assist);
     if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
-    mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled} style=${JSON.stringify(st.style)}`, { quiet: true });
-    const key = st.langs.join('|');
-    if (key !== lastLangsKey && session) startSession(session.movieId, 'slots changed', true);
-    lastLangsKey = key;
+    mark('settings', `enabled=${st.enabled} pinyin=${st.pinyin} style=${JSON.stringify(st.style)} assist=${JSON.stringify(st.assist)}`, { quiet: true });
   });
   let pauseAdPresent = false;
   let controlsVisible = false;
@@ -397,26 +393,24 @@
     if (!force && session && String(session.movieId) === String(movieId)) return;
     stopSession(why);
     await settingsReady;
-    const st = MC_SETTINGS.get();
-    lastLangsKey = st.langs.join('|');
     const rows = tracksFor(movieId);
-    picker.setTracks(rows);
     /** @type {Session} */
     const s = { movieId, lines: [], raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0, lastShown: null };
     session = s;
-    mark('session:start', `movieId=${movieId} slots=${st.langs.map((l) => l || 'off').join(' / ')} (${why})`);
-    const lines = await Promise.all(st.langs.map((lang, i) => loadLine(movieId, rows, lang, i)));
+    mark('session:start', `movieId=${movieId} lines=${LANGS.join(' / ')} (${why})`);
+    const lines = await Promise.all(LANGS.map((lang, i) => loadLine(movieId, rows, lang, i)));
     if (session !== s) return; // superseded while fetching
     s.lines = lines;
     applyExtension(s);
     picker.setState({ resolved: lines.map((l) => (l ? l.pick.lang : null)) });
     if (!lines.some(Boolean)) {
-      mark('session:empty', 'no usable track for any slot; overlay stays down');
+      mark('session:empty', 'neither an English nor a Chinese text track; overlay stays down');
       session = null;
       applyNativeVisibility();
       return;
     }
-    mark('session:ready', lines.map((l, i) => (l ? `slot${i}=${l.pick.lang} "${l.pick.name}" ${l.cues.length} cues` : `slot${i}=off`)).join('; '));
+    mark('session:ready', lines.map((l, i) => (l ? `${LANGS[i]}→${l.pick.lang} "${l.pick.name}" ${l.cues.length} cues` : `${LANGS[i]}: no track`)).join('; '));
+    if (lines[1] && !lines[1].hans) U.warn(`no Simplified Chinese track on movieId=${movieId}; showing ${lines[1].pick.lang} "${lines[1].pick.name}" instead (no pinyin)`);
     ensurePinyin(s);
     if (video) overlay.attach(video, SLOTS, overlayHost());
     applyNativeVisibility();
@@ -424,15 +418,14 @@
   }
 
   /**
-   * Resolve one slot to a track and its parsed cues (cached per title + track).
-   * @param {any} movieId @param {any[]} rows @param {string | null} lang @param {number} slot
+   * Resolve one line to a track and its parsed cues (cached per title + track).
+   * @param {any} movieId @param {any[]} rows @param {string} lang @param {number} slot
    * @returns {Promise<Line | null>}
    */
   async function loadLine(movieId, rows, lang, slot) {
-    if (!lang) return null;
     const pick = N.pickTrack(rows, lang);
     if (!pick) {
-      U.warn(`slot ${slot}: no '${lang}' text track with WebVTT for movieId=${movieId}; available: ${rows.filter((t) => t.url).map((t) => t.lang).join(', ') || 'none'}`);
+      U.warn(`line ${slot} (${lang}): no text track with WebVTT for movieId=${movieId}; available: ${rows.filter((t) => t.url).map((t) => t.lang).join(', ') || 'none'}`);
       return null;
     }
     const key = `${movieId}|${pick.id}`;
@@ -638,9 +631,8 @@
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: any, assist?: any}} */
+    /** @type {{enabled?: boolean, pinyin?: boolean, style?: any, assist?: any}} */
     const clean = {};
-    if (Array.isArray(patch.langs)) clean.langs = patch.langs;
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
     if (typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;

@@ -2,21 +2,21 @@
 /*
  * picker.js — the in-player track picker (isolated world, DOM only).
  *
- * A small pill in the top-right corner shows the current pair ("EN + 简") while
- * Netflix's controls are visible; clicking it (or Ctrl+Shift+M) opens a panel
- * listing the title's text tracks with a radio column per slot. Mounted inside
- * the player view so it survives fullscreen. Styles go through CSSOM.
+ * A small pill in the top-right corner ("EN + 简") shows while Netflix's controls
+ * are visible; clicking it (or Ctrl+Shift+M) opens the settings panel. The two
+ * lines are fixed (English over Simplified Chinese); the panel reports whether
+ * the current title has them. Mounted inside the player view so it survives
+ * fullscreen. Styles go through CSSOM.
  */
 var MC_PICKER = (() => {
   const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
   const PILL_CSS = 'position:absolute;top:11%;right:2.5%;z-index:20;pointer-events:auto;cursor:pointer;font-family:' + FONT + ';font-size:14px;font-weight:600;letter-spacing:.02em;color:#fff;background:rgba(20,20,20,.72);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:6px 12px;line-height:1;backdrop-filter:blur(6px);transition:opacity .2s;';
   const PANEL_CSS = 'position:absolute;top:calc(11% + 40px);right:2.5%;z-index:21;pointer-events:auto;font-family:' + FONT + ';font-size:14px;color:#fff;background:rgba(18,18,18,.94);border:1px solid rgba(255,255,255,.16);border-radius:12px;padding:14px 16px 12px;min-width:340px;max-height:70%;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.6);backdrop-filter:blur(10px);';
-  const ROW_CSS = 'display:grid;grid-template-columns:1fr 64px 64px;align-items:center;gap:8px;padding:5px 0;border-top:1px solid rgba(255,255,255,.07);';
-  const HEAD_CSS = ROW_CSS + 'border-top:none;color:rgba(255,255,255,.55);font-size:12px;text-transform:uppercase;letter-spacing:.08em;';
+  const HEAD_CSS = 'display:block;padding:5px 0;color:rgba(255,255,255,.55);font-size:12px;text-transform:uppercase;letter-spacing:.08em;';
   const RADIO_CSS = 'justify-self:center;width:16px;height:16px;margin:0;accent-color:#e50914;cursor:pointer;';
 
   /** @type {Record<string, string>} */
-  const SHORT = { en: 'EN', 'zh-hans': '简', 'zh-hant': '繁', ja: '日', ko: '한', es: 'ES', fr: 'FR', de: 'DE' };
+  const SHORT = { en: 'EN', 'zh-hans': '简', 'zh-hant': '繁' };
   /** @param {string | null | undefined} lang */
   function short(lang) {
     if (!lang) return '–';
@@ -28,7 +28,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
+   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -39,10 +39,12 @@ var MC_PICKER = (() => {
     let panelEl = null;
     let open = false;
     let controlsVisible = false;
-    /** @type {Array<any>} */
-    let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}} */
-    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
+    /**
+     * `resolved`: the language actually used for each line on the current title
+     * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing.
+     * @type {{enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}}
+     */
+    let state = { enabled: true, pinyin: true, resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -72,20 +74,7 @@ var MC_PICKER = (() => {
       pill = null; panelEl = null; host = null; open = false;
     }
 
-    /** @param {Array<any>} trackRows rows from the page hook (describeTrack + url) */
-    function setTracks(trackRows) {
-      // One row per language: the variant pickTrack() would choose for that language.
-      const byLang = new Map();
-      for (const t of trackRows) {
-        if (!t.url || t.forced || t.none) continue;
-        const chosen = MC_NFLX.pickTrack(trackRows, t.lang);
-        if (chosen && !byLang.has(t.lang)) byLang.set(t.lang, chosen);
-      }
-      rows = [...byLang.values()];
-      renderPanel();
-    }
-
-    /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any, assist?: any}} st */
+    /** @param {{enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any, assist?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -117,8 +106,8 @@ var MC_PICKER = (() => {
 
     function renderPill() {
       if (!pill) return;
-      const a = short(state.resolved[0] ?? state.langs[0]);
-      const b = short(state.resolved[1] ?? state.langs[1]);
+      const a = short(state.resolved[0]);
+      const b = short(state.resolved[1]);
       pill.textContent = state.enabled ? `${a} + ${b}` : `${a} + ${b}  (off)`;
       pill.style.opacity = '';
       pill.style.textDecoration = state.enabled ? '' : 'line-through';
@@ -131,17 +120,6 @@ var MC_PICKER = (() => {
       d.textContent = text;
       d.style.cssText = css;
       return d;
-    }
-
-    /** @param {number} slot @param {string | null} lang @param {boolean} checked */
-    function radio(slot, lang, checked) {
-      const r = document.createElement('input');
-      r.type = 'radio';
-      r.name = 'multicap-slot-' + slot;
-      r.checked = checked;
-      r.style.cssText = RADIO_CSS;
-      r.addEventListener('change', () => handlers.onSlot(slot, lang));
-      return r;
     }
 
     function renderPanel() {
@@ -159,32 +137,20 @@ var MC_PICKER = (() => {
       title.appendChild(close);
       panel.appendChild(title);
 
-      const head = document.createElement('div');
-      head.style.cssText = HEAD_CSS;
-      head.appendChild(el('Track', ''));
-      head.appendChild(el('Top', 'text-align:center;'));
-      head.appendChild(el('Bottom', 'text-align:center;'));
-      panel.appendChild(head);
+      // ---- the fixed pair, and whether this title has it ----
+      const pair = document.createElement('div');
+      pair.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:4px 0 8px;';
+      const lineStatus = (/** @type {string} */ label, /** @type {string} */ want, /** @type {string | null} */ got) => {
+        const ok = got != null;
+        const exact = ok && got.toLowerCase() === want.toLowerCase();
+        const text = !ok ? `${label}: no track on this title` : exact ? `${label}: ${got}` : `${label}: ${got} (no ${want} track; showing ${short(got)})`;
+        return el(`${ok ? '●' : '○'}  ${text}`, `color:${ok ? 'rgba(255,255,255,.9)' : 'rgba(255,120,120,.9)'};`);
+      };
+      pair.appendChild(lineStatus('Top line, English', 'en', state.resolved[0]));
+      pair.appendChild(lineStatus('Bottom line, Simplified Chinese', 'zh-Hans', state.resolved[1]));
+      panel.appendChild(pair);
 
-      const resolvedOrLang = (/** @type {number} */ i) => state.resolved[i] ?? state.langs[i];
-      const off = document.createElement('div');
-      off.style.cssText = ROW_CSS;
-      off.appendChild(el('Off', 'color:rgba(255,255,255,.7);'));
-      off.appendChild(radio(0, null, !state.langs[0]));
-      off.appendChild(radio(1, null, !state.langs[1]));
-      panel.appendChild(off);
-      if (!rows.length) panel.appendChild(el('No text tracks for this title yet.', 'padding:8px 0;color:rgba(255,255,255,.55);'));
-      for (const t of rows) {
-        const row = document.createElement('div');
-        row.style.cssText = ROW_CSS;
-        const cc = /closedcaptions|sdh/i.test(t.raw) ? '  (CC)' : '';
-        row.appendChild(el(`${t.name}${cc}`, ''));
-        row.appendChild(radio(0, t.lang, resolvedOrLang(0) === t.lang));
-        row.appendChild(radio(1, t.lang, resolvedOrLang(1) === t.lang));
-        panel.appendChild(row);
-      }
-
-      const styleHead = el('Style', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;');
+      const styleHead = el('Style', HEAD_CSS + 'margin-top:10px;');
       panel.appendChild(styleHead);
       /**
        * @param {string} label @param {number} value @param {number[]} range @param {number} step
@@ -240,7 +206,7 @@ var MC_PICKER = (() => {
       panel.appendChild(bd);
 
       // ---- reading assist ----
-      panel.appendChild(el('Reading assist', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;'));
+      panel.appendChild(el('Reading assist', HEAD_CSS + 'margin-top:10px;'));
       const as = state.assist;
       const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes']];
       for (const [value, label] of modes) {
@@ -285,7 +251,7 @@ var MC_PICKER = (() => {
       panel.appendChild(foot);
     }
 
-    return { mount, unmount, setTracks, setState, setControlsVisible, toggle, get open() { return open; }, get mounted() { return !!(pill && pill.isConnected); } };
+    return { mount, unmount, setState, setControlsVisible, toggle, get open() { return open; }, get mounted() { return !!(pill && pill.isConnected); } };
   }
 
   return { create, short };

@@ -1092,7 +1092,7 @@ var MC_BRIDGE = (() => {
         '  __multicap.session()    what the overlay is rendering right now',
         '  __multicap.overlay({enabled:false})  hide/show the overlay',
         '  __multicap.sync()       native-cue vs parsed-cue timing agreement (Layer C measurement)',
-        '  __multicap.settings()   persisted preferences; __multicap.setLangs([\'en\', \'zh-Hant\']) to change slots',
+        '  __multicap.settings()   persisted preferences (presentation + reading assist; the language pair is fixed)',
         '  __multicap.setStyle({scale:1.2, bottom:10, slotScale:[1,1.2], backdrop:true})  overlay styling',
         '  __multicap.pinyin(\'你好世界\')  how a line would be annotated (needs the dictionary loaded)',
         '  __multicap.assist()     reading-assist state; __multicap.setAssist({mode:\'pause\', secondsPerChar:0.4})',
@@ -1131,8 +1131,6 @@ var MC_BRIDGE = (() => {
     overlay: (opts) => bridge.call('overlay-set', opts),
     sync: () => bridge.call('sync'),
     settings: () => bridge.call('settings-get'),
-    /** @param {Array<string | null>} langs e.g. ['en', 'zh-Hant'] */
-    setLangs: (langs) => bridge.call('settings-set', { langs }),
     /** @param {{scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}} style */
     setStyle: (style) => bridge.call('settings-set', { style }),
     /** @param {string} text */
