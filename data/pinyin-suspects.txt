@@ -1,0 +1,347 @@
+# Word records whose reading looks wrong. Overridden from the sentences/phrases containing the word when the
+# record uses a syllable the character cannot have, or when 5+ contexts agree at 80%+ against it.
+一件件	record: yí jiàn jiàn	corpus: yī jiàn jiàn (1/2 contexts, impossible syllable)
+一经	record: yì jīng	corpus: yī jīng (4/6 contexts, impossible syllable)
+一绺头发	record: yì liǔ tóu fa	corpus: yī liǔ tóu fa (3/5 contexts, impossible syllable)
+一连	record: yì lián	corpus: yī lián (2/4 contexts, impossible syllable)
+一页	record: yí yè	corpus: yī yè (8/9 contexts, impossible syllable)
+不动产	record: bú dòng chǎn	corpus: bù dòng chǎn (3/5 contexts, impossible syllable)
+不论	record: bú lùn	corpus: bù lùn (3/5 contexts, impossible syllable)
+两只猫	record: liǎng gè māo	corpus: liǎng zhī māo (9/9 contexts, impossible syllable)
+两打	record: liǎng dá	corpus: liǎng dǎ (5/5 contexts)
+为期	record: wèi qī	corpus: wéi qī (5/5 contexts)
+主钉	record: zhǔ dìng	corpus: zhǔ dīng (2/2 contexts, impossible syllable)
+乳腺癌	record: rǔ xià nái	corpus: rǔ xiàn ái (1/1 contexts, impossible syllable)
+了一会儿	record: yī huì er le	corpus: le yī huì er (14/17 contexts, impossible syllable)
+了下来	record: xià lái le	corpus: le xià lái (4/4 contexts, impossible syllable)
+了起来	record: qǐ lái le	corpus: le qǐ lái (49/50 contexts, impossible syllable)
+人潮	record: rén chāo	corpus: rén cháo (7/9 contexts, impossible syllable)
+仍然	record: réng ràn	corpus: réng rán (19/19 contexts, impossible syllable)
+会导致	record: huì dǎo yǐn	corpus: huì dǎo zhì (42/42 contexts, impossible syllable)
+值得买	record: zhí dé bǎi	corpus: zhí dé mǎi (5/6 contexts, impossible syllable)
+傅说	record: fù yuè	corpus: fu shuō (3/5 contexts, impossible syllable)
+养殖	record: yáng zhí	corpus: yǎng zhí (9/9 contexts, impossible syllable)
+冠军	record: guān jūn	corpus: guàn jūn (50/50 contexts)
+冲突	record: chōng tú	corpus: chōng tū (11/17 contexts, impossible syllable)
+划痕	record: huà hén	corpus: huá hén (6/6 contexts)
+刷选	record: shuà xuǎn	corpus: shuā xuǎn (5/5 contexts)
+半打	record: bàn dá	corpus: bàn dǎ (9/9 contexts)
+历史建筑	record: lì shǐ jiàn zhú	corpus: lì shǐ jiàn zhù (4/6 contexts, impossible syllable)
+压轴	record: yà zhóu	corpus: yā zhòu (5/5 contexts)
+古兰经	record: gǔ lān jīng	corpus: gǔ lán jīng (2/2 contexts, impossible syllable)
+吓人	record: hè rén	corpus: xià rén (18/18 contexts)
+吓坏	record: hè huài	corpus: xià huài (6/6 contexts)
+听不到	record: tīng bú dào	corpus: tīng bù dào (3/4 contexts, impossible syllable)
+听候	record: tìng hòu	corpus: tīng hòu (5/5 contexts)
+咖喱	record: kā lí	corpus: gā lí (17/17 contexts)
+咱家	record: zá jiā	corpus: zán jiā (5/5 contexts)
+咻地	record: xiū dì	corpus: xiū de (8/8 contexts)
+哪些	record: něi xiē	corpus: nǎ xiē (14/14 contexts)
+嘬一口	record: zuō yì kǒu	corpus: zuō yī kǒu (4/7 contexts, impossible syllable)
+多么好	record: duō má hǎo	corpus: duō me hǎo (4/7 contexts, impossible syllable)
+多放一点	record: duō fàng yì diǎn	corpus: duō fàng yī diǎn (3/5 contexts, impossible syllable)
+夫子	record: fú zǐ	corpus: fū zǐ (7/7 contexts)
+委蛇	record: wēi yí	corpus: wěi yí (3/5 contexts, impossible syllable)
+存储	record: chǔ cún	corpus: cún chǔ (6/6 contexts, impossible syllable)
+孤立	record: gú lì	corpus: gū lì (3/5 contexts, impossible syllable)
+安全意识	record: ān quán yì shì	corpus: ān quán yì shí (3/6 contexts, impossible syllable)
+屎壳郎	record: shǐ kē láng	corpus: shǐ ké láng (3/4 contexts, impossible syllable)
+屎壳郎戴花	record: shǐ kē láng dài huā	corpus: shǐ ké láng dài huā (3/3 contexts, impossible syllable)
+巍峨	record: wéi é	corpus: wēi é (6/7 contexts, impossible syllable)
+巴拉圭	record: bā lǎ guī	corpus: bā lā guī (2/4 contexts, impossible syllable)
+布局	record: jú bù	corpus: bù jú (4/4 contexts, impossible syllable)
+帧数	record: zhèn shù	corpus: zhēn shù (3/5 contexts, impossible syllable)
+开拓	record: tuò kāi	corpus: kāi tuò (8/8 contexts, impossible syllable)
+当家	record: dàng jiā	corpus: dāng jiā (8/8 contexts)
+待会儿	record: dāi huǐ er	corpus: dāi huì er (1/2 contexts, impossible syllable)
+待在家里	record: dài zài jiā lǐ	corpus: dāi zài jiā lǐ (22/22 contexts)
+忒冷了	record: tèi lěng le	corpus: tēi lěng le (1/1 contexts, impossible syllable)
+恩爱	record: ē nài	corpus: ēn ài (10/10 contexts, impossible syllable)
+惊喜	record: xǐ jīng	corpus: jīng xǐ (32/32 contexts, impossible syllable)
+想一下	record: xiǎng yí xià	corpus: xiǎng yī xià (3/6 contexts, impossible syllable)
+慢点儿	record: màn diǎ er	corpus: màn diǎn er (2/4 contexts, impossible syllable)
+打的	record: dǎ dī	corpus: dǎ de (3/4 contexts, impossible syllable)
+投注	record: zhù zhù	corpus: tóu zhù (1/2 contexts, impossible syllable)
+折断	record: shé duàn	corpus: zhé duàn (8/8 contexts)
+拚命	record: pàn mìng	corpus: pīn mìng (3/5 contexts, impossible syllable)
+提高安全意识	record: tí gāo ān quán yì shì	corpus: tí gāo ān quán yì shí (1/1 contexts, impossible syllable)
+搁不住	record: gē bú zhù	corpus: gé bu zhù (4/4 contexts, impossible syllable)
+搭帐篷	record: dā zhàn peng	corpus: dā zhàng peng (2/2 contexts, impossible syllable)
+擂鼓	record: léi gǔ	corpus: lèi gǔ (6/6 contexts)
+擦窗户	record: cā cāng hù	corpus: cā chuāng hu (2/2 contexts, impossible syllable)
+教导	record: jiāo dǎo	corpus: jiào dǎo (22/22 contexts)
+整个村庄	record: zhěng gè zhuāng cūn	corpus: zhěng gè cūn zhuāng (6/6 contexts, impossible syllable)
+明了	record: míng liǎo	corpus: míng le (20/20 contexts)
+曼尼托巴	record: màn nī tuō bā	corpus: màn ní tuō bā (4/6 contexts, impossible syllable)
+有一点儿	record: yǒu yì diǎn er	corpus: yǒu yī diǎn er (4/6 contexts, impossible syllable)
+有力地	record: yǒu lì dì	corpus: yǒu lì de (6/6 contexts)
+本土文化	record: tǔ běn wén huà	corpus: běn tǔ wén huà (2/2 contexts, impossible syllable)
+校比	record: jiào bǐ	corpus: xiào bǐ (7/7 contexts)
+榨汁器	record: zhà zhī jī	corpus: zhà zhī qì (2/2 contexts, impossible syllable)
+毛毛	record: māo mao	corpus: máo máo (9/9 contexts, impossible syllable)
+片面	record: piān miàn	corpus: piàn miàn (20/20 contexts)
+犒劳	record: kào lào	corpus: kào láo (6/6 contexts)
+猛犸	record: měng mà	corpus: měng mǎ (5/7 contexts, impossible syllable)
+玻璃碴	record: bō li chǎ	corpus: bō li chá (5/8 contexts, impossible syllable)
+瓦煲	record: wǎ bǎo	corpus: wǎ bāo (3/5 contexts, impossible syllable)
+男耕女织	record: náng gēng nǚ zhī	corpus: nán gēng nǚ zhī (2/2 contexts, impossible syllable)
+畜牧	record: chù mù	corpus: xù mù (8/8 contexts)
+相差	record: xiāng chā	corpus: xiāng chà (5/5 contexts)
+睡觉休息	record: shuì jiào xiū xí	corpus: shuì jiào xiū xī (2/4 contexts, impossible syllable)
+知了	record: zhī liǎo	corpus: zhī le (6/6 contexts)
+砂煲	record: shā bǎo	corpus: shā bāo (3/5 contexts, impossible syllable)
+空荡	record: kòng dàng	corpus: kōng dàng (6/6 contexts)
+粘贴	record: nián tiē	corpus: zhān tiē (5/5 contexts)
+聊一下	record: liáo yí xià	corpus: liáo yī xià (2/4 contexts, impossible syllable)
+肉夹馍	record: ròu jiá mò	corpus: ròu jiá mó (2/2 contexts, impossible syllable)
+胆大包天	record: dà dǎn bāo tiān	corpus: dǎn dà bāo tiān (3/5 contexts, impossible syllable)
+脱颖而出	record: tū yǐng ér chū	corpus: tuō yǐng ér chū (3/3 contexts, impossible syllable)
+般乐	record: pán lè	corpus: bān lè (5/5 contexts)
+荫凉的地方	record: yīn liáng de dì fāng	corpus: yìn liáng de dì fāng (1/2 contexts, impossible syllable)
+莫衷一是	record: mò zhōng shì yī	corpus: mò zhōng yī shì (2/2 contexts, impossible syllable)
+落空	record: là kōng	corpus: luò kōng (7/7 contexts)
+行检	record: xìng jiǎn	corpus: xíng jiǎn (10/10 contexts)
+要命	record: yāo mìng	corpus: yào mìng (19/19 contexts)
+解数	record: xiè shù	corpus: jiě shù (5/5 contexts)
+读法	record: dòu fǎ	corpus: dú fǎ (6/6 contexts)
+谁也不让谁	record: shuí yě bù ràng shuí	corpus: shéi yě bù ràng shéi (1/2 contexts, impossible syllable)
+谟略	record: mó lu	corpus: mó luè (2/2 contexts, impossible syllable)
+赡给	record: shàn jǐ	corpus: shàn yǔ (5/5 contexts)
+足量	record: jù liàng	corpus: zú liàng (7/7 contexts)
+跷着脚	record: qiào zhe jiǎo	corpus: qiāo zhe jiǎo (3/3 contexts, impossible syllable)
+车马	record: jū mǎ	corpus: chē mǎ (12/12 contexts)
+转折	record: zhuàn zhé	corpus: zhuǎn zhé (6/6 contexts)
+转眼	record: zhuàn yǎn	corpus: zhuǎn yǎn (17/17 contexts)
+过足	record: guò jù	corpus: guò zú (5/5 contexts)
+进攻	record: gōng jìn	corpus: jìn gōng (10/10 contexts, impossible syllable)
+迷你	record: mí ní	corpus: mí nǐ (4/6 contexts, impossible syllable)
+逻辑	record: luó jì	corpus: luó jí (26/41 contexts, impossible syllable)
+逻辑思维	record: luó jì sī wéi	corpus: luó jí sī wéi (2/2 contexts, impossible syllable)
+逻辑性	record: luó jì xìng	corpus: luó jí xìng (7/9 contexts, impossible syllable)
+量力	record: liáng lì	corpus: liàng lì (7/7 contexts)
+金额	record: jī né	corpus: jīn é (4/6 contexts, impossible syllable)
+链接	record: lián jiē	corpus: liàn jiē (9/11 contexts, impossible syllable)
+长大	record: cháng dà	corpus: zhǎng dà (60/60 contexts)
+雨润	record: yù rùn	corpus: yǔ rùn (6/6 contexts, impossible syllable)
+雨降	record: yù jiàng	corpus: yǔ jiàng (4/4 contexts, impossible syllable)
+雨雪	record: yù xuě	corpus: yǔ xuě (6/6 contexts, impossible syllable)
+雨霏	record: yù fēi	corpus: yǔ fēi (7/7 contexts, impossible syllable)
+雨露	record: yù lù	corpus: yǔ lù (5/5 contexts, impossible syllable)
+题材	record: tí tái	corpus: tí cái (5/7 contexts, impossible syllable)
+骨朵	record: gū duǒ	corpus: gǔ duǒ (4/6 contexts, impossible syllable)
+黄埔	record: huáng bù	corpus: huáng pǔ (6/6 contexts)
+默默地	record: mò mò dì	corpus: mò mò de (5/5 contexts)
+
+# Impossible syllable but no corpus evidence to fix it (record kept):
+一个比一个好	record: yí gè bǐ yí gè hǎo
+一个比一个懒	record: yí gè bǐ yí gè lǎn
+一句句	record: yí jù jù
+一笔笔一笔笔	record: yì bǐ bǐ yì bǐ bǐ
+一页页	record: yí yè yè
+不到一百块	record: bú dào yī bǎi kuài
+不到三十岁	record: bú dào sān shí suì
+不到十块钱	record: bú dào shí kuài qián
+东峤	record: dōng qiáo
+事后诸葛亮	record: shì hòu zhū gě liàng
+仆射	record: pú yè
+从小事著手	record: cóng xiǎo shì zhuó shǒu
+倘然	record: tǎng ràn
+凯撒	record: kǎi sà
+删略	record: shān lu
+前列腺癌	record: qián liè xià nái
+劫掠	record: jié lu
+半身不遂	record: bàn shēn bù suí
+博学多才	record: bó xuě duō cái
+参茸	record: shēn ròng
+另辟蹊径	record: lìng pì xī jìng
+叨唠嗑	record: dāo láo kē
+叭嗒	record: bā dā
+叽里呱啦	record: jī lǐ guā lā
+吟哦	record: yí né
+吧嗒吧嗒	record: bā dā bā dā
+呃嗯	record: è ǹg
+呋喃化合物	record: fū nà huà hé wù
+呋喃化学	record: fū nà huà xué
+呋喃唑酮	record: fū nà zuò tóng
+呋喃基团	record: fū nà jī tuán
+呋喃妥因	record: fū nà tuǒ yīn
+呋喃树脂	record: fū nà shù zhī
+呋喃类药物	record: fū nà lèi yào wù
+呋喃衍生物	record: fū nà yǎn shēng wù
+呋喃西林	record: fū nà xī lín
+呼歙	record: hū xī
+咀嚼习惯	record: jǔ jué xí guàn
+咀嚼体验	record: jǔ jué tǐ yàn
+咀嚼力	record: jǔ jué lì
+咀嚼功能	record: jǔ jué gōng néng
+咀嚼困难	record: jǔ jué kùn nán
+咀嚼思考	record: jǔ jué sī kǎo
+咀嚼文字	record: jǔ jué wén zì
+咀嚼肌	record: jǔ jué jī
+咀嚼过程	record: jǔ jué guò chéng
+咆哮不止	record: páo xiào bù zhǐ
+咆哮声	record: páo xiào shēng
+咆哮如雷	record: páo xiào rú léi
+咆哮者	record: páo xiào zhě
+咆哮风声	record: páo xiào fēng shēng
+咔叽	record: kā jī
+咔吧	record: kā bā
+咔咔作响	record: kā kā zuò xiǎng
+咔哒	record: kā dā
+咔啦作响	record: kā lā zuò xiǎng
+咔嗒一声	record: kā dā yī shēng
+咔嚓一声	record: kā chā yī shēng
+咖喱牛肉	record: gā lí niú ròu
+咖喱猪排	record: gā lí zhū pái
+咖喱粉	record: gā lí fěn
+咖喱蔬菜	record: gā lí shū cài
+咖喱虾	record: gā lí xiā
+咖喱角	record: gā lí jiǎo
+咖喱面	record: gā lí miàn
+咖喱饭	record: gā lí fàn
+咖喱鱼	record: gā lí yú
+咪唑	record: mǐ zuò
+哧咔	record: chī kā
+唠闲嗑	record: láo xián kē
+啪嗒	record: pā dā
+啾嘀	record: jiū dī
+喀嗒	record: kā dā
+喀尔巴阡	record: kā ěr bā jiǎn
+嗒嗪	record: tā qín
+嘀嗒响	record: dí dā xiǎng
+嘀嗒声	record: dí dā shēng
+嘀嘀嗒嗒	record: dí dí dā dā
+嘎叽	record: gā jī
+嘎吱	record: gā zhī
+嘎啦	record: gā lā
+嘎嘣	record: gā bēng
+嘎愣	record: gā lèng
+嘎然	record: gā rán
+嘧啶碱基	record: mì dìng jiān jī
+噻呋酰胺	record: sāi fú xiān àn
+在树上休息	record: zài shù shàng xiū xí
+大展宏兔	record: dà zhǎn hóng tú
+妙法莲华经	record: miào fǎ lián huā jīng
+姊妹淘	record: zǐ mèi tāo
+婪虐	record: lán nu
+存款金额	record: cún kuǎn jī né
+学识渊博	record: xué shì yuān bó
+宫颈癌	record: gōng jǐn gái
+少傅的职责	record: shào fù de zhí rèn
+屉框	record: tì kuāng
+峤路	record: qiáo lù
+干呕	record: gā nǒu
+开锁钥匙	record: kāi suǒ yào shi
+待会儿见	record: dāi huǐ er jiàn
+徊心	record: huí xīn
+心下了然	record: xīn lǐ liǎo rán
+忘记我是谁	record: wàng jì wǒ shì shuí
+悄悄放屁	record: qiāo qiāo fàng pì
+情趣盎然	record: qíng qù àng ràn
+意趣盎然	record: yì qù àng ràn
+慕求知识	record: mù qiú zhī shì
+成绩不太好	record: chéng jī bù tài hǎo
+成绩勉强及格	record: chéng jī miǎn qiǎng jí gé
+戮虐	record: lù nu
+扭矩	record: niǔ jù
+抗癌	record: kàn gái
+拚争	record: pàn zhēng
+拚力	record: pàn lì
+拚却	record: pàn què
+拚尽	record: pàn jìn
+拚弃	record: pàn qì
+拚战	record: pàn zhàn
+拚抢	record: pàn qiǎng
+拚搏	record: pàn bó
+拚杀	record: pàn shā
+拚死	record: pàn sǐ
+拷掠	record: kǎo lu
+掉帧	record: diào zhèng
+掳掠	record: lǔ lu
+摒弃旧观念	record: bìng qì jiù guān niàn
+摩挲	record: mó sā
+春意盎然	record: chūn yì àng ràn
+朽木粪墙	record: xiǔ mù fèng qiáng
+杨荫	record: yáng yīn
+柳荫	record: liǔ yīn
+栏框	record: lán kuāng
+桐荫	record: tóng yīn
+椰蓉面包	record: yē ròng miàn bāo
+欣喜欢跃	record: xīn xǐ ruò kuáng
+沦肌浃髓	record: lún jī jià suǐ
+潦灾	record: lào zāi
+澡帕	record: zǎo pā
+灯芯绒	record: dēng xīn ròng
+烹熬	record: pēn gáo
+熔融	record: róng ròng
+燕京	record: yān jīng
+燕国	record: yān guó
+燕山	record: yān shān
+燕赵	record: yān zhào
+爪哇	record: zhǎo wā
+牝钥	record: pìn yào
+畸胎	record: jī tái
+疙疙瘩瘩	record: gē gē dā dā
+疙瘩事	record: gē dā shì
+疙瘩汤	record: gē dā tāng
+疙里疙瘩	record: gē lǐ gē dā
+直肠癌	record: zhí chán gái
+相继发生	record: jì xiāng fā shēng
+着眼于未来	record: zhuó yān yú wèi lái
+睡眼惺忪	record: shuì yǎn xīng sōng
+睾丸癌	record: gāo wá nái
+睿识	record: ruì shì
+知识匮乏	record: zhī shì kuì fá
+知识广博	record: zhī shì guǎng bó
+碌碡	record: lù zhóu
+篱栅	record: lí shān
+糊剂	record: hù jì
+糨糊	record: jiàng hù
+结肠癌	record: jié chán gái
+综框	record: zèng kuāng
+绿意盎然	record: lǜ yì àng ràn
+老挝人	record: lǎo wō rén
+肆虐	record: sì nu
+胰腺癌	record: yí xià nái
+胳肢窝儿	record: gā zhi wō er
+脊令	record: jǐ líng
+膀胱癌	record: páng guān gái
+花岗岩	record: huā gāng yán
+苛虐	record: kē nu
+菁莪	record: jīn gé
+蔚县	record: yù xiàn
+虏掠	record: lǔ lu
+蝗蝻	record: huáng kūn
+衔恩	record: xiá nēn
+袁裳	record: yuán shang
+裘裳	record: qiú shang
+裱框	record: biǎo kuāng
+裹挟	record: guǒ xiā
+褐煤	record: hè mèi
+褶裳	record: xí shang
+视频帧	record: shì pín zhèng
+谁都知道	record: shuí dōu zhī dào
+蹦迪	record: bèng dī
+轧轲	record: zhá gē
+迤逦	record: yí lì
+逻辑错误	record: luó jì cuò wù
+酢酬	record: cù chóu
+钥匙孔	record: yào shi kǒng
+钥匙扣	record: yào shi kòu
+钥匙链	record: yào shi liàn
+铁板钉钉	record: tiě bǎn dìng dīng
+铝框	record: lǔ kuāng
+雨泽	record: yù zé
+雨滋	record: yù zī
+雨潦	record: yù láo
+雨濡	record: yù rú
+霓裳羽衣	record: ní shang yǔ yī
+霖潦	record: lín lào
+霪潦	record: yín liáo
+霪澍	record: yín zhù
+颠扑不破	record: diān pǔ bù pò
+高筒靴	record: gāo tǒng xué
+鬲津	record: gé jīn
+鳞爪	record: lín zhǎo
+鸭绒	record: yā ròng
+鹰爪	record: yīng zhǎo
