@@ -188,7 +188,9 @@ mid-roll ahead.
   unmatched because the matcher only searched within 60 s of the stale
   estimate, so the offset never stepped. The matcher now falls back to a
   global search and accepts a unique text as the step candidate (two agreeing
-  samples still required). Covered by the Node smoke test; live re-run pending.
+  samples still required). Covered by the Node smoke test, then verified live:
+  through a 32 s break in fallback mode the offset stepped to −32.05 s, 19 of
+  19 native cues matched, and our content time sat 0.02 s from the player's.
 - Restoring the two functions flipped the clock back to the player source
   within a second.
 - `requestAnimationFrame` does not run while the tab is hidden, so the render
@@ -200,3 +202,10 @@ mid-roll ahead.
   Netflix's UI on the pause card with the player running underneath (audio
   without picture). Clearing it needs Netflix's own play button. The extension
   never calls play/pause; test drills should use the UI (Space) instead.
+- **Native layer re-styled by Netflix:** after the break Netflix rewrote
+  `.player-timedtext`'s style attribute (`position: absolute; inset: 0 40px;
+  display: block; …`), dropping our inline `opacity: 0`, so the native English
+  line reappeared under ours. Hiding now uses an adopted stylesheet rule with
+  `!important`, with the inline opacity re-checked every tick as a fallback.
+- Cue-boundary note: at a pause right at a cue's end, Netflix may still show
+  the cue while we have already cleared it (sub-100 ms edge; not a bug).
