@@ -167,21 +167,48 @@ fs.writeFileSync(path.join(path.dirname(outFile), 'pinyin-suspects.txt'),
   suspects.join('\n') + '\n\n# Impossible syllable but no corpus evidence to fix it (record kept):\n' + unfixable.join('\n') + '\n');
 
 // Characters that only appear inside words: derive a reading from the aligned syllable.
+// Also count how often each reading occurs across all word entries: sense_rank orders
+// meanings, not readings (好's rank-1 sense is hào "to like"), and the per-character
+// fallback should show the reading a learner most often meets (hǎo).
 let derivedChars = 0;
+/** @type {Map<string, Map<string, number>>} */
+const readingFreq = new Map();
 for (const [text, w] of words) {
   if (w.whole) continue;
   const cps = [...text];
   cps.forEach((c, i) => {
     if (!chars.has(c)) { chars.set(c, [{ p: w.syl[i], rank: 999 }]); derivedChars++; }
+    let f = readingFreq.get(c);
+    if (!f) readingFreq.set(c, (f = new Map()));
+    const key = baseOf(w.syl[i]) + '/' + toneOf(w.syl[i]);
+    f.set(key, (f.get(key) || 0) + 1);
   });
 }
+/** Corpus frequency of a character reading (neutral-tone spellings count for the marked one too). @param {string} c @param {string} syl */
+const freqOf = (c, syl) => {
+  const f = readingFreq.get(c);
+  if (!f) return 0;
+  let n = 0;
+  for (const [key, count] of f) { const [b, t] = key.split('/'); if (b === baseOf(syl) && (t === '0' || toneOf(syl) === 0 || Number(t) === toneOf(syl))) n += count; }
+  return n;
+};
 
 /** @type {Record<string, string>} */
 const wordOut = {};
 for (const [text, w] of [...words].sort((a, b) => a[0].localeCompare(b[0]))) wordOut[text] = w.syl.join(' ');
+// Standalone grammatical particles: when one of these is not part of a dictionary word, the
+// particle reading is almost always the right one in subtitles, whatever the word-frequency
+// order says (地 inside words is dì, but a lone 地 after an adverb is de).
+/** @type {Record<string, string>} */
+const STANDALONE_FIRST = { '地': 'de', '得': 'de', '了': 'le', '着': 'zhe', '的': 'de', '过': 'guo', '为': 'wèi', '吗': 'ma', '呢': 'ne', '吧': 'ba', '啊': 'a' };
 /** @type {Record<string, string[]>} */
 const charOut = {};
-for (const [c, list] of [...chars].sort((a, b) => a[0].localeCompare(b[0]))) charOut[c] = list.sort((a, b) => a.rank - b.rank).map((e) => e.p);
+for (const [c, list] of [...chars].sort((a, b) => a[0].localeCompare(b[0]))) {
+  const ordered = list.sort((a, b) => (freqOf(c, b.p) - freqOf(c, a.p)) || (a.rank - b.rank)).map((e) => e.p);
+  const first = STANDALONE_FIRST[c];
+  if (first && ordered.includes(first)) ordered.splice(0, 0, ...ordered.splice(ordered.indexOf(first), 1));
+  charOut[c] = ordered;
+}
 
 const out = {
   meta: {
@@ -190,7 +217,7 @@ const out = {
     words: Object.keys(wordOut).length,
     chars: Object.keys(charOut).length,
     maxLen: MAX_LEN,
-    notes: 'words: text → space-separated syllables, one per character (erhua split); chars: readings in sense order. Simplified Chinese only.',
+    notes: 'words: text → space-separated syllables, one per character; chars: readings ordered by corpus frequency, then sense rank. Simplified Chinese only.',
   },
   words: wordOut,
   chars: charOut,

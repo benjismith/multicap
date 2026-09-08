@@ -984,15 +984,17 @@ var MC_CLOCK = (() => {
 /*
  * overlay.js — the subtitle layer drawn over Netflix's video. DOM only; no timing logic.
  *
- * Placement (verified 2026-09-07): the <video> is position:absolute inside a
- * position:relative box that also holds Netflix's own `.player-timedtext`; that box is
- * the visible picture (the video element itself can be taller and is clipped). We add
- * one sibling to the box. Styles go through CSSOM so the page's CSP cannot block them.
+ * Placement (verified 2026-09-08): mounted in the player view (`.watch-video--player-view`),
+ * which is also where Netflix puts its pause card. The video's own box sits under
+ * `video-canvas`, whose `will-change: opacity` creates a stacking context, so an overlay
+ * inside it can never rise above the pause card; a sibling in the player view with
+ * z-index 5 can (the card is z-index 1). The player view is the visible picture size.
+ * Falls back to the video's parent box when the player view is missing. Styles go
+ * through CSSOM so the page's CSP cannot block them.
  */
 var MC_OVERLAY = (() => {
   const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-  // z-index 5: above Netflix's pause card (a z-index:1 layer in the player view; verified 2026-09-08 that no
-  // ancestor of our box creates a stacking context), below the picker pill/panel (20/21).
+  // z-index 5: above Netflix's pause card (z-index 1, same parent), below the picker pill/panel (20/21).
   const ROOT_CSS = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 5% 7%;box-sizing:border-box;z-index:5;';
   const LINE_CSS = 'color:#fff;text-align:center;white-space:pre-line;line-height:1.3;max-width:90%;margin:0.1em 0;padding:0.05em 0.4em;font-weight:500;font-family:' + FONT + ';text-shadow:0 0 6px rgba(0,0,0,.9),0 0 2px #000,1px 1px 2px #000;';
   /** Base font size as a fraction of the picture box height, before the user's scale. */
@@ -1042,11 +1044,12 @@ var MC_OVERLAY = (() => {
     }
 
     /**
-     * Mount next to `video`. Re-entrant: a no-op when already mounted in the same box.
-     * @param {HTMLVideoElement} video @param {number} lineCount
+     * Mount into `hostEl` (the player view) or, failing that, next to `video`.
+     * Re-entrant: a no-op when already mounted in the same box.
+     * @param {HTMLVideoElement} video @param {number} lineCount @param {HTMLElement | null} [hostEl]
      */
-    function attach(video, lineCount) {
-      const parent = video.parentElement;
+    function attach(video, lineCount, hostEl) {
+      const parent = hostEl || video.parentElement;
       if (!parent) return false;
       if (root && host === parent && root.isConnected && lines.length === lineCount) return true;
       detach();
