@@ -324,7 +324,8 @@
     const s = session;
     if (!s || !video) return null;
     const c = clock.now();
-    const hidden = (c.movieId != null && String(c.movieId) !== String(s.movieId)) || c.inAd || !MC_SETTINGS.get().enabled;
+    const st = MC_SETTINGS.get();
+    const hidden = (c.movieId != null && String(c.movieId) !== String(s.movieId)) || c.inAd || !st.chinese;
     let zh = '';
     let end = -Infinity;
     if (!hidden) {
@@ -338,7 +339,7 @@
     return { t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh, end };
   }
   const picker = MC_PICKER.create({
-    onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+    onLines(patch) { MC_SETTINGS.save(patch); },
     onPinyin(pinyin) { MC_SETTINGS.save({ pinyin: /** @type {any} */ (pinyin) }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
     onAssist(patch) { MC_SETTINGS.save({ assist: /** @type {any} */ (patch) }); },
@@ -349,15 +350,15 @@
   const assistConfig = (st) => ({ mode: /** @type {'off' | 'pause'} */ (st.assist.pause === 'off' ? 'off' : 'pause'), secondsPerChar: st.assist.secondsPerChar, autoResume: st.assist.pause === 'timed' });
   /** What Ctrl+Shift+P switches back to. */
   let lastPauseMode = 'timed';
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(assistConfig(st)); if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause; return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ english: st.english, chinese: st.chinese, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(assistConfig(st)); if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause; return st; });
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
+    picker.setState({ english: st.english, chinese: st.chinese, pinyin: st.pinyin, style: st.style, assist: st.assist });
     overlay.setStyle(overlayStyle(st));
     assist.configure(assistConfig(st));
     if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause;
     if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
-    mark('settings', `enabled=${st.enabled} pinyin=${st.pinyin} style=${JSON.stringify(st.style)} assist=${JSON.stringify(st.assist)}`, { quiet: true });
+    mark('settings', `english=${st.english} chinese=${st.chinese} pinyin=${st.pinyin} style=${JSON.stringify(st.style)} assist=${JSON.stringify(st.assist)}`, { quiet: true });
   });
   let pauseAdPresent = false;
   let controlsVisible = false;
@@ -492,15 +493,17 @@
     if (!video || !video.isConnected) return;
     if (!overlay.mounted) overlay.attach(video, SLOTS, overlayHost());
     const c = clock.now();
+    const st = MC_SETTINGS.get();
+    const show = [st.english, st.chinese];
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
-    const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled;
+    const hidden = wrongMovie || c.inAd || !(st.english || st.chinese);
     let texts = s.lines.map(() => '');
     let zhText = '';
     let zhEnd = -Infinity;
     if (!hidden) {
       let end = -Infinity;
-      texts = s.lines.map((l) => {
-        if (!l) return '';
+      texts = s.lines.map((l, i) => {
+        if (!l || !show[i]) return '';
         const active = MC_SUBS.activeCues(l.cues, c.t, l.cursor);
         for (const x of active) end = Math.max(end, x.end);
         const text = active.map((x) => x.text).join('\n');
@@ -511,7 +514,7 @@
       else if (video.paused && s.lastShown && c.t >= s.lastShown.end - 0.5 && c.t - s.lastShown.end <= STICKY_S) texts = s.lastShown.texts; // reading time while paused
     }
     assist.update({ t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh: zhText, end: zhEnd });
-    const pinyin = MC_SETTINGS.get().pinyin !== 'none' && MC_PINYIN.isReady();
+    const pinyin = st.pinyin !== 'none' && MC_PINYIN.isReady();
     const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
@@ -567,7 +570,7 @@
   document.addEventListener('keydown', (e) => {
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
-    else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyH') { const cur = MC_SETTINGS.get(); const on = !(cur.english || cur.chinese); MC_SETTINGS.save({ english: on, chinese: on }); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { pause: /** @type {any} */ (MC_SETTINGS.get().assist.pause === 'off' ? lastPauseMode : 'off') } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
@@ -631,16 +634,20 @@
     session: sessionSummary(),
   }));
   bridge.handle('session', sessionSummary);
-  bridge.handle('overlay-set', (/** @type {{enabled?: boolean}} */ opts) => {
-    if (opts && typeof opts.enabled === 'boolean') MC_SETTINGS.save({ enabled: opts.enabled });
-    return { enabled: MC_SETTINGS.get().enabled };
+  bridge.handle('overlay-set', (/** @type {{enabled?: boolean, english?: boolean, chinese?: boolean}} */ opts) => {
+    if (opts && typeof opts.enabled === 'boolean') MC_SETTINGS.save({ english: opts.enabled, chinese: opts.enabled });
+    if (opts && (typeof opts.english === 'boolean' || typeof opts.chinese === 'boolean')) MC_SETTINGS.save({ ...(typeof opts.english === 'boolean' ? { english: opts.english } : {}), ...(typeof opts.chinese === 'boolean' ? { chinese: opts.chinese } : {}) });
+    const cur = MC_SETTINGS.get();
+    return { english: cur.english, chinese: cur.chinese };
   });
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{enabled?: boolean, pinyin?: any, style?: any, assist?: any}} */
+    /** @type {{english?: boolean, chinese?: boolean, pinyin?: any, style?: any, assist?: any}} */
     const clean = {};
-    if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    if (typeof patch.enabled === 'boolean') { clean.english = patch.enabled; clean.chinese = patch.enabled; }
+    if (typeof patch.english === 'boolean') clean.english = patch.english;
+    if (typeof patch.chinese === 'boolean') clean.chinese = patch.chinese;
     if (typeof patch.pinyin === 'string' || typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     if (patch.assist && typeof patch.assist === 'object') clean.assist = patch.assist;

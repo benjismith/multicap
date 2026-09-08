@@ -1263,7 +1263,7 @@ var MC_SETTINGS = (() => {
    * pause: hold the caption before it vanishes and resume after the reading time (timed) or
    * wait for the viewer (manual); extend: let captions linger into silence.
    */
-  /** @typedef {{enabled: boolean, pinyin: Pinyin, style: Style, assist: Assist}} Settings */
+  /** @typedef {{english: boolean, chinese: boolean, pinyin: Pinyin, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
   const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
@@ -1275,7 +1275,7 @@ var MC_SETTINGS = (() => {
   const DEFAULT_ASSIST = { pause: 'off', secondsPerChar: 0.4, extend: true };
   const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
   const PAUSE_MODES = ['off', 'timed', 'manual'];
-  const DEFAULTS = { enabled: true, pinyin: 'below', style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
+  const DEFAULTS = { english: true, chinese: true, pinyin: 'below', style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -1297,7 +1297,9 @@ var MC_SETTINGS = (() => {
   function normalize(raw) {
     const s = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
     delete s.langs; // language slots existed in earlier builds
-    s.enabled = s.enabled !== false;
+    if (typeof s.enabled === 'boolean') { if (!s.enabled) { s.english = false; s.chinese = false; } delete s.enabled; } // one master toggle, earlier
+    s.english = s.english !== false;
+    s.chinese = s.chinese !== false;
     const st = { ...DEFAULT_STYLE, ...(s.style && typeof s.style === 'object' ? s.style : {}) };
     // pinyin was a boolean plus style.rubyUnder in earlier builds
     if (typeof s.pinyin === 'boolean') s.pinyin = s.pinyin ? (st.rubyUnder === false ? 'above' : 'below') : 'none';
@@ -1320,7 +1322,7 @@ var MC_SETTINGS = (() => {
     return s;
   }
 
-  /** @param {{enabled?: boolean, pinyin?: Pinyin, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
+  /** @param {{english?: boolean, chinese?: boolean, pinyin?: Pinyin, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
     cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) }, assist: { ...cur.assist, ...(patch.assist || {}) } });
@@ -1673,7 +1675,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 76px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {pause?: string, secondsPerChar?: number, extend?: boolean}) => void}} handlers
+   * @param {{onLines: (patch: {english?: boolean, chinese?: boolean}) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {pause?: string, secondsPerChar?: number, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1688,9 +1690,9 @@ var MC_PICKER = (() => {
      * `resolved`: the language actually used for each line on the current title
      * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing;
      * it only feeds the pill.
-     * @type {{enabled: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {pause: string, secondsPerChar: number, extend: boolean}}}
+     * @type {{english: boolean, chinese: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {pause: string, secondsPerChar: number, extend: boolean}}}
      */
-    let state = { enabled: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { pause: 'off', secondsPerChar: 0.4, extend: true } };
+    let state = { english: true, chinese: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { pause: 'off', secondsPerChar: 0.4, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1720,7 +1722,7 @@ var MC_PICKER = (() => {
       pill = null; panelEl = null; host = null; open = false;
     }
 
-    /** @param {{enabled?: boolean, pinyin?: string, resolved?: Array<string | null>, style?: any, assist?: any}} st */
+    /** @param {{english?: boolean, chinese?: boolean, pinyin?: string, resolved?: Array<string | null>, style?: any, assist?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -1752,11 +1754,11 @@ var MC_PICKER = (() => {
 
     function renderPill() {
       if (!pill) return;
-      const a = short(state.resolved[0]);
-      const b = short(state.resolved[1]);
-      pill.textContent = state.enabled ? `${a} + ${b}` : `${a} + ${b}  (off)`;
+      const parts = [];
+      if (state.english) parts.push(short(state.resolved[0]));
+      if (state.chinese) parts.push(short(state.resolved[1]));
+      pill.textContent = parts.length ? parts.join(' + ') : 'off';
       pill.style.opacity = '';
-      pill.style.textDecoration = state.enabled ? '' : 'line-through';
       updatePillVisibility();
     }
 
@@ -1804,7 +1806,19 @@ var MC_PICKER = (() => {
       title.appendChild(close);
       panel.appendChild(title);
 
-      const styleHead = el('Style', HEAD_CSS);
+      // ---- captions ----
+      const capRow = (/** @type {string} */ label, /** @type {HTMLElement} */ control) => {
+        const r = document.createElement('div');
+        r.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;';
+        r.appendChild(el(label, 'flex:1;'));
+        r.appendChild(control);
+        panel.appendChild(r);
+      };
+      capRow('English', segmented([['off', 'Off'], ['on', 'On']], state.english ? 'on' : 'off', (v) => handlers.onLines({ english: v === 'on' })));
+      capRow('Chinese', segmented([['off', 'Off'], ['on', 'On']], state.chinese ? 'on' : 'off', (v) => handlers.onLines({ chinese: v === 'on' })));
+      capRow('Pinyin', segmented([['none', 'None'], ['above', 'Above'], ['below', 'Below']], state.pinyin, (v) => handlers.onPinyin(v)));
+
+      const styleHead = el('Style', HEAD_CSS + 'margin-top:10px;');
       panel.appendChild(styleHead);
       /**
        * @param {string} label @param {number} value @param {number[]} range @param {number} step
@@ -1833,11 +1847,6 @@ var MC_PICKER = (() => {
       slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
       slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
       slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
-      const py = document.createElement('div');
-      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;';
-      py.appendChild(el('Pinyin', 'flex:1;'));
-      py.appendChild(segmented([['none', 'None'], ['above', 'Above'], ['below', 'Below']], state.pinyin, (v) => handlers.onPinyin(v)));
-      panel.appendChild(py);
 
       const bd = document.createElement('label');
       bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
@@ -1862,17 +1871,6 @@ var MC_PICKER = (() => {
       row('Pause to read', segmented([['off', 'Off'], ['timed', 'Timed'], ['manual', 'Manual']], as.pause, (v) => handlers.onAssist({ pause: v })));
       slider('Reading time', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + ' s/char', (v) => handlers.onAssist({ secondsPerChar: v }));
 
-      const foot = document.createElement('label');
-      foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = state.enabled;
-      cb.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      cb.addEventListener('change', () => handlers.onEnabled(cb.checked));
-      foot.appendChild(cb);
-      foot.appendChild(el('Show subtitles', 'flex:1;'));
-      foot.appendChild(el('Ctrl+Shift+H', 'color:rgba(255,255,255,.45);font-size:12px;'));
-      panel.appendChild(foot);
     }
 
     return { mount, unmount, setState, setControlsVisible, toggle, get open() { return open; }, get mounted() { return !!(pill && pill.isConnected); } };
@@ -2208,7 +2206,8 @@ var MC_PICKER = (() => {
     const s = session;
     if (!s || !video) return null;
     const c = clock.now();
-    const hidden = (c.movieId != null && String(c.movieId) !== String(s.movieId)) || c.inAd || !MC_SETTINGS.get().enabled;
+    const st = MC_SETTINGS.get();
+    const hidden = (c.movieId != null && String(c.movieId) !== String(s.movieId)) || c.inAd || !st.chinese;
     let zh = '';
     let end = -Infinity;
     if (!hidden) {
@@ -2222,7 +2221,7 @@ var MC_PICKER = (() => {
     return { t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh, end };
   }
   const picker = MC_PICKER.create({
-    onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+    onLines(patch) { MC_SETTINGS.save(patch); },
     onPinyin(pinyin) { MC_SETTINGS.save({ pinyin: /** @type {any} */ (pinyin) }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
     onAssist(patch) { MC_SETTINGS.save({ assist: /** @type {any} */ (patch) }); },
@@ -2233,15 +2232,15 @@ var MC_PICKER = (() => {
   const assistConfig = (st) => ({ mode: /** @type {'off' | 'pause'} */ (st.assist.pause === 'off' ? 'off' : 'pause'), secondsPerChar: st.assist.secondsPerChar, autoResume: st.assist.pause === 'timed' });
   /** What Ctrl+Shift+P switches back to. */
   let lastPauseMode = 'timed';
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(assistConfig(st)); if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause; return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ english: st.english, chinese: st.chinese, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(assistConfig(st)); if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause; return st; });
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
+    picker.setState({ english: st.english, chinese: st.chinese, pinyin: st.pinyin, style: st.style, assist: st.assist });
     overlay.setStyle(overlayStyle(st));
     assist.configure(assistConfig(st));
     if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause;
     if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
-    mark('settings', `enabled=${st.enabled} pinyin=${st.pinyin} style=${JSON.stringify(st.style)} assist=${JSON.stringify(st.assist)}`, { quiet: true });
+    mark('settings', `english=${st.english} chinese=${st.chinese} pinyin=${st.pinyin} style=${JSON.stringify(st.style)} assist=${JSON.stringify(st.assist)}`, { quiet: true });
   });
   let pauseAdPresent = false;
   let controlsVisible = false;
@@ -2376,15 +2375,17 @@ var MC_PICKER = (() => {
     if (!video || !video.isConnected) return;
     if (!overlay.mounted) overlay.attach(video, SLOTS, overlayHost());
     const c = clock.now();
+    const st = MC_SETTINGS.get();
+    const show = [st.english, st.chinese];
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
-    const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled;
+    const hidden = wrongMovie || c.inAd || !(st.english || st.chinese);
     let texts = s.lines.map(() => '');
     let zhText = '';
     let zhEnd = -Infinity;
     if (!hidden) {
       let end = -Infinity;
-      texts = s.lines.map((l) => {
-        if (!l) return '';
+      texts = s.lines.map((l, i) => {
+        if (!l || !show[i]) return '';
         const active = MC_SUBS.activeCues(l.cues, c.t, l.cursor);
         for (const x of active) end = Math.max(end, x.end);
         const text = active.map((x) => x.text).join('\n');
@@ -2395,7 +2396,7 @@ var MC_PICKER = (() => {
       else if (video.paused && s.lastShown && c.t >= s.lastShown.end - 0.5 && c.t - s.lastShown.end <= STICKY_S) texts = s.lastShown.texts; // reading time while paused
     }
     assist.update({ t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh: zhText, end: zhEnd });
-    const pinyin = MC_SETTINGS.get().pinyin !== 'none' && MC_PINYIN.isReady();
+    const pinyin = st.pinyin !== 'none' && MC_PINYIN.isReady();
     const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
@@ -2451,7 +2452,7 @@ var MC_PICKER = (() => {
   document.addEventListener('keydown', (e) => {
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
-    else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyH') { const cur = MC_SETTINGS.get(); const on = !(cur.english || cur.chinese); MC_SETTINGS.save({ english: on, chinese: on }); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { pause: /** @type {any} */ (MC_SETTINGS.get().assist.pause === 'off' ? lastPauseMode : 'off') } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
@@ -2515,16 +2516,20 @@ var MC_PICKER = (() => {
     session: sessionSummary(),
   }));
   bridge.handle('session', sessionSummary);
-  bridge.handle('overlay-set', (/** @type {{enabled?: boolean}} */ opts) => {
-    if (opts && typeof opts.enabled === 'boolean') MC_SETTINGS.save({ enabled: opts.enabled });
-    return { enabled: MC_SETTINGS.get().enabled };
+  bridge.handle('overlay-set', (/** @type {{enabled?: boolean, english?: boolean, chinese?: boolean}} */ opts) => {
+    if (opts && typeof opts.enabled === 'boolean') MC_SETTINGS.save({ english: opts.enabled, chinese: opts.enabled });
+    if (opts && (typeof opts.english === 'boolean' || typeof opts.chinese === 'boolean')) MC_SETTINGS.save({ ...(typeof opts.english === 'boolean' ? { english: opts.english } : {}), ...(typeof opts.chinese === 'boolean' ? { chinese: opts.chinese } : {}) });
+    const cur = MC_SETTINGS.get();
+    return { english: cur.english, chinese: cur.chinese };
   });
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{enabled?: boolean, pinyin?: any, style?: any, assist?: any}} */
+    /** @type {{english?: boolean, chinese?: boolean, pinyin?: any, style?: any, assist?: any}} */
     const clean = {};
-    if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    if (typeof patch.enabled === 'boolean') { clean.english = patch.enabled; clean.chinese = patch.enabled; }
+    if (typeof patch.english === 'boolean') clean.english = patch.english;
+    if (typeof patch.chinese === 'boolean') clean.chinese = patch.chinese;
     if (typeof patch.pinyin === 'string' || typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     if (patch.assist && typeof patch.assist === 'object') clean.assist = patch.assist;

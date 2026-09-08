@@ -17,7 +17,7 @@ var MC_SETTINGS = (() => {
    * pause: hold the caption before it vanishes and resume after the reading time (timed) or
    * wait for the viewer (manual); extend: let captions linger into silence.
    */
-  /** @typedef {{enabled: boolean, pinyin: Pinyin, style: Style, assist: Assist}} Settings */
+  /** @typedef {{english: boolean, chinese: boolean, pinyin: Pinyin, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
   const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
@@ -29,7 +29,7 @@ var MC_SETTINGS = (() => {
   const DEFAULT_ASSIST = { pause: 'off', secondsPerChar: 0.4, extend: true };
   const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
   const PAUSE_MODES = ['off', 'timed', 'manual'];
-  const DEFAULTS = { enabled: true, pinyin: 'below', style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
+  const DEFAULTS = { english: true, chinese: true, pinyin: 'below', style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -51,7 +51,9 @@ var MC_SETTINGS = (() => {
   function normalize(raw) {
     const s = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
     delete s.langs; // language slots existed in earlier builds
-    s.enabled = s.enabled !== false;
+    if (typeof s.enabled === 'boolean') { if (!s.enabled) { s.english = false; s.chinese = false; } delete s.enabled; } // one master toggle, earlier
+    s.english = s.english !== false;
+    s.chinese = s.chinese !== false;
     const st = { ...DEFAULT_STYLE, ...(s.style && typeof s.style === 'object' ? s.style : {}) };
     // pinyin was a boolean plus style.rubyUnder in earlier builds
     if (typeof s.pinyin === 'boolean') s.pinyin = s.pinyin ? (st.rubyUnder === false ? 'above' : 'below') : 'none';
@@ -74,7 +76,7 @@ var MC_SETTINGS = (() => {
     return s;
   }
 
-  /** @param {{enabled?: boolean, pinyin?: Pinyin, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
+  /** @param {{english?: boolean, chinese?: boolean, pinyin?: Pinyin, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
     cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) }, assist: { ...cur.assist, ...(patch.assist || {}) } });

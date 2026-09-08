@@ -400,14 +400,14 @@
         '  __multicap.adBreaks()   ad breaks (content-time locations) from the ad manager',
         '  __multicap.tracks()     subtitle tracks of the current manifest (with WebVTT availability)',
         '  __multicap.session()    what the overlay is rendering right now',
-        '  __multicap.overlay({enabled:false})  hide/show the overlay',
+        '  __multicap.overlay({english:false}) / ({chinese:false}) / ({enabled:false})  show/hide lines',
         '  __multicap.sync()       native-cue vs parsed-cue timing agreement (Layer C measurement)',
         '  __multicap.settings()   persisted preferences (presentation + reading assist; the language pair is fixed)',
         '  __multicap.setStyle({scale:1.2, bottom:10, slotScale:[1,1.2], backdrop:true})  overlay styling',
         '  __multicap.setPinyin(\'none\'|\'above\'|\'below\')',
         '  __multicap.pinyin(\'你好世界\')  how a line would be annotated (needs the dictionary loaded)',
         '  __multicap.assist()     reading-assist state; __multicap.setAssist({pause:\'timed\', secondsPerChar:0.4, extend:true})',
-        '  keyboard: Ctrl+Shift+M track picker, Ctrl+Shift+H hide/show, Ctrl+Shift+P reading assist on/off',
+        '  keyboard: Ctrl+Shift+M settings, Ctrl+Shift+H hide/show both lines, Ctrl+Shift+P pause-to-read on/off',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
         '  __multicap.probe()      introspect the player API now',
@@ -438,7 +438,7 @@
     /** @param {any} [movieId] */
     tracks(movieId) { return trackRows(movieId).map((t) => ({ ...t, url: t.url ? '(url)' : null })); },
     session: () => bridge.call('session'),
-    /** @param {{enabled?: boolean}} opts */
+    /** @param {{enabled?: boolean, english?: boolean, chinese?: boolean}} opts */
     overlay: (opts) => bridge.call('overlay-set', opts),
     sync: () => bridge.call('sync'),
     settings: () => bridge.call('settings-get'),

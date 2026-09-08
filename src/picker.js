@@ -28,7 +28,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 76px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {pause?: string, secondsPerChar?: number, extend?: boolean}) => void}} handlers
+   * @param {{onLines: (patch: {english?: boolean, chinese?: boolean}) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {pause?: string, secondsPerChar?: number, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -43,9 +43,9 @@ var MC_PICKER = (() => {
      * `resolved`: the language actually used for each line on the current title
      * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing;
      * it only feeds the pill.
-     * @type {{enabled: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {pause: string, secondsPerChar: number, extend: boolean}}}
+     * @type {{english: boolean, chinese: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {pause: string, secondsPerChar: number, extend: boolean}}}
      */
-    let state = { enabled: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { pause: 'off', secondsPerChar: 0.4, extend: true } };
+    let state = { english: true, chinese: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { pause: 'off', secondsPerChar: 0.4, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -75,7 +75,7 @@ var MC_PICKER = (() => {
       pill = null; panelEl = null; host = null; open = false;
     }
 
-    /** @param {{enabled?: boolean, pinyin?: string, resolved?: Array<string | null>, style?: any, assist?: any}} st */
+    /** @param {{english?: boolean, chinese?: boolean, pinyin?: string, resolved?: Array<string | null>, style?: any, assist?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -107,11 +107,11 @@ var MC_PICKER = (() => {
 
     function renderPill() {
       if (!pill) return;
-      const a = short(state.resolved[0]);
-      const b = short(state.resolved[1]);
-      pill.textContent = state.enabled ? `${a} + ${b}` : `${a} + ${b}  (off)`;
+      const parts = [];
+      if (state.english) parts.push(short(state.resolved[0]));
+      if (state.chinese) parts.push(short(state.resolved[1]));
+      pill.textContent = parts.length ? parts.join(' + ') : 'off';
       pill.style.opacity = '';
-      pill.style.textDecoration = state.enabled ? '' : 'line-through';
       updatePillVisibility();
     }
 
@@ -159,7 +159,19 @@ var MC_PICKER = (() => {
       title.appendChild(close);
       panel.appendChild(title);
 
-      const styleHead = el('Style', HEAD_CSS);
+      // ---- captions ----
+      const capRow = (/** @type {string} */ label, /** @type {HTMLElement} */ control) => {
+        const r = document.createElement('div');
+        r.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;';
+        r.appendChild(el(label, 'flex:1;'));
+        r.appendChild(control);
+        panel.appendChild(r);
+      };
+      capRow('English', segmented([['off', 'Off'], ['on', 'On']], state.english ? 'on' : 'off', (v) => handlers.onLines({ english: v === 'on' })));
+      capRow('Chinese', segmented([['off', 'Off'], ['on', 'On']], state.chinese ? 'on' : 'off', (v) => handlers.onLines({ chinese: v === 'on' })));
+      capRow('Pinyin', segmented([['none', 'None'], ['above', 'Above'], ['below', 'Below']], state.pinyin, (v) => handlers.onPinyin(v)));
+
+      const styleHead = el('Style', HEAD_CSS + 'margin-top:10px;');
       panel.appendChild(styleHead);
       /**
        * @param {string} label @param {number} value @param {number[]} range @param {number} step
@@ -188,11 +200,6 @@ var MC_PICKER = (() => {
       slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
       slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
       slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
-      const py = document.createElement('div');
-      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;';
-      py.appendChild(el('Pinyin', 'flex:1;'));
-      py.appendChild(segmented([['none', 'None'], ['above', 'Above'], ['below', 'Below']], state.pinyin, (v) => handlers.onPinyin(v)));
-      panel.appendChild(py);
 
       const bd = document.createElement('label');
       bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
@@ -217,17 +224,6 @@ var MC_PICKER = (() => {
       row('Pause to read', segmented([['off', 'Off'], ['timed', 'Timed'], ['manual', 'Manual']], as.pause, (v) => handlers.onAssist({ pause: v })));
       slider('Reading time', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + ' s/char', (v) => handlers.onAssist({ secondsPerChar: v }));
 
-      const foot = document.createElement('label');
-      foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = state.enabled;
-      cb.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      cb.addEventListener('change', () => handlers.onEnabled(cb.checked));
-      foot.appendChild(cb);
-      foot.appendChild(el('Show subtitles', 'flex:1;'));
-      foot.appendChild(el('Ctrl+Shift+H', 'color:rgba(255,255,255,.45);font-size:12px;'));
-      panel.appendChild(foot);
     }
 
     return { mount, unmount, setState, setControlsVisible, toggle, get open() { return open; }, get mounted() { return !!(pill && pill.isConnected); } };
