@@ -156,6 +156,33 @@ var MC_NFLX = (() => {
     };
   }
 
+  /**
+   * Choose the track to render for a language, from describeTrack() rows plus `url`.
+   * Exact BCP-47 match beats a base-language match; subtitles beat closed captions;
+   * PRIMARY beats ASSISTIVE. Forced, "none", and URL-less tracks are skipped.
+   * @param {Array<any>} tracks
+   * @param {string} lang
+   */
+  function pickTrack(tracks, lang) {
+    const base = (/** @type {any} */ l) => String(l).toLowerCase().split('-')[0];
+    const want = lang.toLowerCase();
+    const score = (/** @type {any} */ t) => {
+      if (!t.url || t.forced || t.none) return -1;
+      let sc = 0;
+      if (String(t.lang).toLowerCase() === want) sc += 100;
+      else if (base(t.lang) === base(want)) sc += 50;
+      else return -1;
+      if (/^subtitles$/i.test(t.raw)) sc += 10;
+      else if (/closedcaptions|sdh/i.test(t.raw)) sc += 5;
+      if (t.type === 'PRIMARY') sc += 1;
+      return sc;
+    };
+    let best = null;
+    let bestScore = -1;
+    for (const t of tracks) { const sc = score(t); if (sc > bestScore) { best = t; bestScore = sc; } }
+    return best;
+  }
+
   // ---- DOM -----------------------------------------------------------------
 
   const SEL = {
@@ -199,7 +226,7 @@ var MC_NFLX = (() => {
    */
   function pickWatchSession(ids) {
     if (!Array.isArray(ids) || !ids.length) return null;
-    return ids.find((i) => /^watch/i.test(String(i))) ?? ids[ids.length - 1];
+    return ids.find((i) => /^watch/i.test(String(i))) ?? null; // strict: previews/billboards have other prefixes
   }
 
   /** The active /watch player object, or null. */
@@ -332,7 +359,7 @@ var MC_NFLX = (() => {
   return {
     WEBVTT_PROFILE, FORMATS, SHAPE_MANIFEST_REQUESTS, PRUNE_KEYS, INTEREST_KEY_RE,
     manifestFromParsed, nearMissReason, manifestRequestParams, shapeManifestRequest,
-    trackDownloadUrl, describeTrack,
+    trackDownloadUrl, describeTrack, pickTrack,
     SEL, AD_TEXT_RE, AD_TOKEN_RE,
     playerApi, pickWatchSession, watchPlayer, MANIFEST_PATH, looksLikeManifest, findManifest, manifestFromPlayer,
     contentTimeMs, mediaTimeMs, adState, adBreaks,

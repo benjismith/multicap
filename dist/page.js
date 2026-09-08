@@ -159,6 +159,33 @@ var MC_NFLX = (() => {
     };
   }
 
+  /**
+   * Choose the track to render for a language, from describeTrack() rows plus `url`.
+   * Exact BCP-47 match beats a base-language match; subtitles beat closed captions;
+   * PRIMARY beats ASSISTIVE. Forced, "none", and URL-less tracks are skipped.
+   * @param {Array<any>} tracks
+   * @param {string} lang
+   */
+  function pickTrack(tracks, lang) {
+    const base = (/** @type {any} */ l) => String(l).toLowerCase().split('-')[0];
+    const want = lang.toLowerCase();
+    const score = (/** @type {any} */ t) => {
+      if (!t.url || t.forced || t.none) return -1;
+      let sc = 0;
+      if (String(t.lang).toLowerCase() === want) sc += 100;
+      else if (base(t.lang) === base(want)) sc += 50;
+      else return -1;
+      if (/^subtitles$/i.test(t.raw)) sc += 10;
+      else if (/closedcaptions|sdh/i.test(t.raw)) sc += 5;
+      if (t.type === 'PRIMARY') sc += 1;
+      return sc;
+    };
+    let best = null;
+    let bestScore = -1;
+    for (const t of tracks) { const sc = score(t); if (sc > bestScore) { best = t; bestScore = sc; } }
+    return best;
+  }
+
   // ---- DOM -----------------------------------------------------------------
 
   const SEL = {
@@ -202,7 +229,7 @@ var MC_NFLX = (() => {
    */
   function pickWatchSession(ids) {
     if (!Array.isArray(ids) || !ids.length) return null;
-    return ids.find((i) => /^watch/i.test(String(i))) ?? ids[ids.length - 1];
+    return ids.find((i) => /^watch/i.test(String(i))) ?? null; // strict: previews/billboards have other prefixes
   }
 
   /** The active /watch player object, or null. */
@@ -335,7 +362,7 @@ var MC_NFLX = (() => {
   return {
     WEBVTT_PROFILE, FORMATS, SHAPE_MANIFEST_REQUESTS, PRUNE_KEYS, INTEREST_KEY_RE,
     manifestFromParsed, nearMissReason, manifestRequestParams, shapeManifestRequest,
-    trackDownloadUrl, describeTrack,
+    trackDownloadUrl, describeTrack, pickTrack,
     SEL, AD_TEXT_RE, AD_TOKEN_RE,
     playerApi, pickWatchSession, watchPlayer, MANIFEST_PATH, looksLikeManifest, findManifest, manifestFromPlayer,
     contentTimeMs, mediaTimeMs, adState, adBreaks,
@@ -935,6 +962,35 @@ var MC_BRIDGE = (() => {
 
   // ---- bridge handlers (answered synchronously for the extension side) ----------
 
+  // Per-frame clock for the extension side: [contentMs, adPresenting, movieId] or null.
+  // The player lookup walks the session list, so cache it for a second at a time.
+  let cachedPlayer = { p: /** @type {any} */ (null), at: 0 };
+  function currentPlayer() {
+    const now = Date.now();
+    if (cachedPlayer.p && now - cachedPlayer.at < 1000) return cachedPlayer.p;
+    const p = N.watchPlayer();
+    cachedPlayer = { p, at: now };
+    return p;
+  }
+  bridge.handle('t', () => {
+    const p = currentPlayer();
+    if (!p) return null;
+    try {
+      const ad = N.adState(p);
+      return [N.contentTimeMs(p), ad ? ad.presenting : null, typeof p.getMovieId === 'function' ? p.getMovieId() : null];
+    } catch {
+      cachedPlayer = { p: null, at: 0 };
+      return null;
+    }
+  });
+  /** Track rows (describeTrack + WebVTT url) for a captured manifest, latest if movieId is omitted. */
+  function trackRows(/** @type {any} */ movieId) {
+    const rec = movieId == null ? state.manifests[state.manifests.length - 1] : state.manifests.find((r) => String(r.movieId) === String(movieId));
+    if (!rec) return [];
+    return rec.manifest.timedtexttracks.map((/** @type {any} */ t) => ({ ...N.describeTrack(t), url: N.trackDownloadUrl(t, N.WEBVTT_PROFILE) }));
+  }
+  bridge.handle('tracks', trackRows);
+
   bridge.handle('ping', () => 'pong');
   bridge.handle('manifests', manifestSummaries);
   bridge.handle('manifest-check', captureFromPlayer);
@@ -1022,6 +1078,10 @@ var MC_BRIDGE = (() => {
         '  __multicap.manifest()   last raw manifest object; .manifest(-2) for the previous one',
         '  __multicap.capture()    read the manifest from the player object graph now',
         '  __multicap.adBreaks()   ad breaks (content-time locations) from the ad manager',
+        '  __multicap.tracks()     subtitle tracks of the current manifest (with WebVTT availability)',
+        '  __multicap.session()    what the overlay is rendering right now',
+        '  __multicap.overlay({enabled:false})  hide/show the overlay',
+        '  __multicap.sync()       native-cue vs parsed-cue timing agreement (Layer C measurement)',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
         '  __multicap.probe()      introspect the player API now',
@@ -1049,6 +1109,12 @@ var MC_BRIDGE = (() => {
     manifest(i = -1) { if (!state.manifests.length) captureFromPlayer(); return state.manifests.at(i)?.manifest ?? null; },
     capture: captureFromPlayer,
     adBreaks() { const p = N.watchPlayer(); return p ? N.adBreaks(p) : []; },
+    /** @param {any} [movieId] */
+    tracks(movieId) { return trackRows(movieId).map((t) => ({ ...t, url: t.url ? '(url)' : null })); },
+    session: () => bridge.call('session'),
+    /** @param {{enabled?: boolean}} opts */
+    overlay: (opts) => bridge.call('overlay-set', opts),
+    sync: () => bridge.call('sync'),
     manifests: manifestSummaries,
     requests: () => state.requests,
     probe: () => probe(true),

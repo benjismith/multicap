@@ -278,6 +278,35 @@
 
   // ---- bridge handlers (answered synchronously for the extension side) ----------
 
+  // Per-frame clock for the extension side: [contentMs, adPresenting, movieId] or null.
+  // The player lookup walks the session list, so cache it for a second at a time.
+  let cachedPlayer = { p: /** @type {any} */ (null), at: 0 };
+  function currentPlayer() {
+    const now = Date.now();
+    if (cachedPlayer.p && now - cachedPlayer.at < 1000) return cachedPlayer.p;
+    const p = N.watchPlayer();
+    cachedPlayer = { p, at: now };
+    return p;
+  }
+  bridge.handle('t', () => {
+    const p = currentPlayer();
+    if (!p) return null;
+    try {
+      const ad = N.adState(p);
+      return [N.contentTimeMs(p), ad ? ad.presenting : null, typeof p.getMovieId === 'function' ? p.getMovieId() : null];
+    } catch {
+      cachedPlayer = { p: null, at: 0 };
+      return null;
+    }
+  });
+  /** Track rows (describeTrack + WebVTT url) for a captured manifest, latest if movieId is omitted. */
+  function trackRows(/** @type {any} */ movieId) {
+    const rec = movieId == null ? state.manifests[state.manifests.length - 1] : state.manifests.find((r) => String(r.movieId) === String(movieId));
+    if (!rec) return [];
+    return rec.manifest.timedtexttracks.map((/** @type {any} */ t) => ({ ...N.describeTrack(t), url: N.trackDownloadUrl(t, N.WEBVTT_PROFILE) }));
+  }
+  bridge.handle('tracks', trackRows);
+
   bridge.handle('ping', () => 'pong');
   bridge.handle('manifests', manifestSummaries);
   bridge.handle('manifest-check', captureFromPlayer);
@@ -365,6 +394,10 @@
         '  __multicap.manifest()   last raw manifest object; .manifest(-2) for the previous one',
         '  __multicap.capture()    read the manifest from the player object graph now',
         '  __multicap.adBreaks()   ad breaks (content-time locations) from the ad manager',
+        '  __multicap.tracks()     subtitle tracks of the current manifest (with WebVTT availability)',
+        '  __multicap.session()    what the overlay is rendering right now',
+        '  __multicap.overlay({enabled:false})  hide/show the overlay',
+        '  __multicap.sync()       native-cue vs parsed-cue timing agreement (Layer C measurement)',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
         '  __multicap.probe()      introspect the player API now',
@@ -392,6 +425,12 @@
     manifest(i = -1) { if (!state.manifests.length) captureFromPlayer(); return state.manifests.at(i)?.manifest ?? null; },
     capture: captureFromPlayer,
     adBreaks() { const p = N.watchPlayer(); return p ? N.adBreaks(p) : []; },
+    /** @param {any} [movieId] */
+    tracks(movieId) { return trackRows(movieId).map((t) => ({ ...t, url: t.url ? '(url)' : null })); },
+    session: () => bridge.call('session'),
+    /** @param {{enabled?: boolean}} opts */
+    overlay: (opts) => bridge.call('overlay-set', opts),
+    sync: () => bridge.call('sync'),
     manifests: manifestSummaries,
     requests: () => state.requests,
     probe: () => probe(true),

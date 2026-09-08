@@ -2,13 +2,13 @@
 /*
  * content.js — extension side (isolated world), document_start.
  *
- * Phase 0: instrumentation only. Watches the <video> element, the player DOM
- * (for ad UI appearing / disappearing, via data-uia diffs and ad-word text),
- * Netflix's native subtitle layer, and the URL, and stamps every observation
- * with video.currentTime (media time). Also asks the page hook for the player
- * API clock so the two can be compared over time.
+ * Owns the playback session: when the page hook reports a manifest, pick the
+ * configured track, fetch and parse its WebVTT, mount the overlay next to the
+ * <video>, and drive it from the content clock on requestAnimationFrame.
  *
- * Nothing here renders anything yet.
+ * Keeps the Phase 0 instrumentation (video events, data-uia diffs, ad text,
+ * native subtitle cues, URL changes), stamped with media time, because it is
+ * how breakage gets diagnosed.
  */
 (() => {
   if (typeof MC_UTIL === 'undefined' || typeof MC_NFLX === 'undefined' || typeof MC_BRIDGE === 'undefined') {
@@ -22,7 +22,7 @@
 
   /** @type {ReturnType<typeof U.ring<{t: number, media: number | null, kind: string, detail: string}>>} */
   const timeline = U.ring(3000);
-  /** @type {ReturnType<typeof U.ring<{media: number | null, text: string}>>} */
+  /** @type {ReturnType<typeof U.ring<{media: number | null, content: number, text: string}>>} */
   const nativeCues = U.ring(300);
   /** @type {Map<string, {first: number | null, adds: number, removes: number, muted: boolean}>} */
   const uiaStats = new Map();
@@ -77,6 +77,7 @@
     const gen = ++videoGen;
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
+    if (session) overlay.attach(v, WANT_LANGS.length);
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
@@ -94,7 +95,7 @@
     if (v !== video) {
       if (video && !video.isConnected) mark('video:detached', `#${videoGen}`);
       if (v) attachVideo(v);
-      else if (video) { mark('video:gone'); video = null; }
+      else if (video) { mark('video:gone'); video = null; overlay.detach(); }
     }
     if (video) lastSeenTime = video.currentTime;
   }
@@ -131,7 +132,7 @@
     const now = new Set();
     for (const el of root.querySelectorAll('[data-uia]')) now.add(el.getAttribute('data-uia') ?? '');
     if (!uiaPrev.size && now.size) {
-      mark('uia:baseline', `${now.size} values: ${[...now].join('  ')}`);
+      mark('uia:baseline', `${now.size} values: ${[...now].join('  ')}`, { quiet: true });
       for (const v of now) uiaStats.set(v, { first: mt(), adds: 1, removes: 0, muted: false });
       uiaPrev = now;
       return;
@@ -154,7 +155,7 @@
       mark('uia:mute', `${v} flips too often; muting`, { quiet: true });
       return;
     }
-    mark(`uia${sign}`, v + (adLike ? '   <== AD-LIKE' : ''), { quiet: !adLike && flips > 6 });
+    mark(`uia${sign}`, v + (adLike ? '   <== AD-LIKE' : ''), { quiet: !adLike });
   }
 
   /** @type {Map<string, number>} */
@@ -206,15 +207,18 @@
     if (!el) { mark('native:gone', `${N.SEL.timedtext} left the DOM`); return; }
     const cs = getComputedStyle(el);
     mark('native:attach', `${N.SEL.timedtext} found (opacity=${cs.opacity} display=${cs.display} visibility=${cs.visibility})`);
+    applyNativeVisibility();
     const obs = new MutationObserver(() => {
       if (ttEl !== el) { obs.disconnect(); return; }
       const t = (el.textContent || '').trim().replace(/\s+/g, ' ');
       if (t === ttLast) return;
       ttLast = t;
       ttCount++;
-      nativeCues.push({ media: mt(), text: t });
-      if (ttCount <= 25) mark('native:cue', t ? `"${t.slice(0, 80)}"` : '(cleared)');
-      else if (ttCount === 26) mark('native:cue', '… further native cue changes recorded silently (see summary)');
+      const c = clock.now();
+      nativeCues.push({ media: mt(), content: c.t, text: t });
+      if (t) onNativeCue(t, c.t);
+      if (ttCount <= 8) mark('native:cue', t ? `content=${c.t.toFixed(3)} "${t.slice(0, 80)}"` : '(cleared)');
+      else if (ttCount === 9) mark('native:cue', '… further native cue changes recorded silently (see summary / __multicap.sync())');
     });
     obs.observe(el, { subtree: true, childList: true, characterData: true });
   }
@@ -231,7 +235,7 @@
     mark('url', lastHref);
     clearTimeout(watchdog);
     const id = N.watchIdFromUrl(lastHref);
-    if (!id) return;
+    if (!id) { stopSession('left /watch'); return; }
     watchSince = Date.now();
     watchdog = setTimeout(() => {
       const ms = /** @type {any[]} */ (U.safe(() => bridge.call('manifests'), []) ?? []);
@@ -240,10 +244,137 @@
     }, WATCHDOG_MS);
   }
 
+  // ---- session: track → cues → overlay, driven by the content clock -------------------
+
+  /** Languages to render, in line order. Phase 1 renders one; Phase 2 adds the second + a picker. */
+  const WANT_LANGS = ['en'];
+  const clock = MC_CLOCK.create(bridge, () => video);
+  const overlay = MC_OVERLAY.create();
+  let overlayEnabled = true;
+  let pauseAdPresent = false;
+
+  /** @typedef {{movieId: any, track: any, cues: Array<{begin: number, end: number, text: string, settings: string}>, cursor: {i: number}, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
+  /** @type {Session | null} */
+  let session = null;
+
+  /** @param {any} movieId */
+  async function startSession(movieId) {
+    if (session && String(session.movieId) === String(movieId)) return;
+    stopSession('new manifest');
+    const tracks = /** @type {any[]} */ (U.safe(() => bridge.call('tracks', movieId), []) ?? []);
+    const pick = N.pickTrack(tracks, WANT_LANGS[0]);
+    if (!pick) {
+      U.warn(`no '${WANT_LANGS[0]}' text track with WebVTT for movieId=${movieId}; available: ${tracks.map((t) => `${t.lang}${t.url ? '' : '(no url)'}`).join(', ') || 'none'}`);
+      return;
+    }
+    /** @type {Session} */
+    const s = { movieId, track: pick, cues: [], cursor: { i: 0 }, raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0 };
+    session = s;
+    mark('session:start', `movieId=${movieId} track=${pick.lang} "${pick.name}" (${pick.raw})`);
+    let text = '';
+    try {
+      const resp = await fetch(pick.url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      text = await resp.text();
+    } catch (err) {
+      U.warn(`subtitle fetch failed for ${pick.lang} (${String(err).slice(0, 120)}); no overlay for movieId=${movieId}`);
+      if (session === s) session = null;
+      return;
+    }
+    if (session !== s) return; // superseded while fetching
+    const parsed = MC_SUBS.parseWebVTT(text);
+    for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
+    s.cues = parsed.cues;
+    if (!s.cues.length) { session = null; return; }
+    mark('session:ready', `${s.cues.length} cues; first @${s.cues[0].begin.toFixed(3)}s "${s.cues[0].text.slice(0, 40)}"; last ends @${s.cues[s.cues.length - 1].end.toFixed(1)}s`);
+    if (video) overlay.attach(video, WANT_LANGS.length);
+    applyNativeVisibility();
+    s.raf = requestAnimationFrame(frame);
+  }
+
+  /** @param {string} why */
+  function stopSession(why) {
+    if (!session) return;
+    session.stopped = true;
+    cancelAnimationFrame(session.raf);
+    mark('session:stop', `movieId=${session.movieId} (${why})`);
+    session = null;
+    overlay.detach();
+    applyNativeVisibility();
+  }
+
+  function frame() {
+    const s = session;
+    if (!s || s.stopped) return;
+    s.raf = requestAnimationFrame(frame);
+    if (!video || !video.isConnected) return;
+    if (!overlay.mounted) overlay.attach(video, WANT_LANGS.length);
+    const c = clock.now();
+    const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
+    const hidden = wrongMovie || c.inAd || !overlayEnabled || pauseAdPresent;
+    const text = hidden ? '' : MC_SUBS.activeCues(s.cues, c.t, s.cursor).map((x) => x.text).join('\n');
+    const key = text + (hidden ? '|hidden' : '');
+    if (key === s.lastKey) return;
+    s.lastKey = key;
+    s.cueChanges++;
+    overlay.render([text], !hidden);
+    if (text) mark('cue', `content=${c.t.toFixed(3)} "${text.slice(0, 60)}"`, { quiet: true });
+  }
+
+  /** Netflix's own subtitle layer: invisible while we render (it keeps updating, which Layer C needs). */
+  function applyNativeVisibility() {
+    if (ttEl instanceof HTMLElement) ttEl.style.opacity = session ? '0' : '';
+  }
+
+  function sessionSummary() {
+    if (!session) return { active: false, clockSource: clock.source, overlayEnabled };
+    const c = clock.now();
+    const active = MC_SUBS.activeCues(session.cues, c.t, { i: session.cursor.i });
+    return {
+      active: true, movieId: session.movieId, track: `${session.track.lang} "${session.track.name}" (${session.track.raw})`,
+      cues: session.cues.length, cueChanges: session.cueChanges, overlayMounted: overlay.mounted, overlayEnabled,
+      clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
+      showing: active.map((x) => x.text), pauseAdPresent,
+    };
+  }
+
+  // ---- Layer C measurement: native cue text vs parsed cue timing --------------------------
+  // For every native cue that appears, find the parsed cue with the same normalized text
+  // near the current content time and record (contentTime − cue.begin). Zero means the
+  // player's clock and the WebVTT agree; a step means an ad offset we failed to account for.
+  /** @type {ReturnType<typeof U.ring<{content: number, begin: number, delta: number, text: string}>>} */
+  const syncSamples = U.ring(200);
+  let unmatchedNative = 0;
+
+  /** @param {string} nativeText @param {number} contentTime */
+  function onNativeCue(nativeText, contentTime) {
+    if (!session || !session.cues.length) return;
+    const want = MC_SUBS.normalizeForMatch(nativeText);
+    if (!want) return;
+    let best = null;
+    let bestDist = Infinity;
+    for (const cue of session.cues) {
+      if (Math.abs(cue.begin - contentTime) > 20) continue;
+      if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
+      const d = Math.abs(cue.begin - contentTime);
+      if (d < bestDist) { best = cue; bestDist = d; }
+    }
+    if (!best) { unmatchedNative++; return; }
+    syncSamples.push({ content: +contentTime.toFixed(3), begin: best.begin, delta: +(contentTime - best.begin).toFixed(3), text: nativeText.slice(0, 40) });
+  }
+
+  function syncReport() {
+    const items = syncSamples.items();
+    const deltas = items.map((x) => x.delta).sort((a, b) => a - b);
+    const median = deltas.length ? deltas[deltas.length >> 1] : null;
+    return { matched: items.length, unmatched: unmatchedNative, medianDelta: median, minDelta: deltas[0] ?? null, maxDelta: deltas[deltas.length - 1] ?? null, last: items.slice(-8) };
+  }
+
   // ---- bridge wiring -----------------------------------------------------------------
 
   bridge.on('manifest', (m) => {
     mark('manifest', `movieId=${m.movieId} dur=${m.durationMs}ms tracks=${m.trackCount} adverts=${m.advertsSummary} aux=${m.auxCount}`);
+    if (N.watchIdFromUrl(location.href)) startSession(m.movieId);
     setTimeout(() => {
       const p = U.safe(() => bridge.call('probe'), null);
       if (!p) mark('probe', 'bridge call failed');
@@ -258,8 +389,15 @@
     timeline: timeline.items(),
     uia: [...uiaStats].map(([v, s]) => ({ v, ...s })),
     nativeCueCount: ttCount,
-    nativeCues: nativeCues.items().slice(0, 40),
+    nativeCues: nativeCues.items().slice(-40),
+    session: sessionSummary(),
   }));
+  bridge.handle('session', sessionSummary);
+  bridge.handle('overlay-set', (/** @type {{enabled?: boolean}} */ opts) => {
+    if (opts && typeof opts.enabled === 'boolean') overlayEnabled = opts.enabled;
+    return { enabled: overlayEnabled };
+  });
+  bridge.handle('sync', syncReport);
 
   // ---- boot --------------------------------------------------------------------------
 
@@ -280,6 +418,8 @@
   function domAdTick() {
     const now = !!document.querySelector(N.SEL.adsInfo);
     if (now !== domAd) { domAd = now; mark('dom-ad', now ? `ON (${N.SEL.adsInfo} present)` : 'OFF'); }
+    const pa = !!document.querySelector(N.SEL.pauseAd);
+    if (pa !== pauseAdPresent) { pauseAdPresent = pa; mark('pause-ad', pa ? 'ON' : 'OFF', { quiet: true }); }
   }
 
   function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); }
@@ -287,7 +427,7 @@
   function boot() {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
     setInterval(tick, 500);
-    setInterval(clockTick, 5000);
+    setInterval(clockTick, 10000);
     const pong = U.safe(() => bridge.call('ping'), null);
     if (pong !== 'pong') U.warn('page hook (MAIN world) not reachable — JSON hooks are NOT active. Check manifest.json content_scripts and that Chrome ≥ 111.');
     else U.log('phase-0 instrumentation active; page hook reachable. In the page console: __multicap.help()');

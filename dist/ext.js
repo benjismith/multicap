@@ -159,6 +159,33 @@ var MC_NFLX = (() => {
     };
   }
 
+  /**
+   * Choose the track to render for a language, from describeTrack() rows plus `url`.
+   * Exact BCP-47 match beats a base-language match; subtitles beat closed captions;
+   * PRIMARY beats ASSISTIVE. Forced, "none", and URL-less tracks are skipped.
+   * @param {Array<any>} tracks
+   * @param {string} lang
+   */
+  function pickTrack(tracks, lang) {
+    const base = (/** @type {any} */ l) => String(l).toLowerCase().split('-')[0];
+    const want = lang.toLowerCase();
+    const score = (/** @type {any} */ t) => {
+      if (!t.url || t.forced || t.none) return -1;
+      let sc = 0;
+      if (String(t.lang).toLowerCase() === want) sc += 100;
+      else if (base(t.lang) === base(want)) sc += 50;
+      else return -1;
+      if (/^subtitles$/i.test(t.raw)) sc += 10;
+      else if (/closedcaptions|sdh/i.test(t.raw)) sc += 5;
+      if (t.type === 'PRIMARY') sc += 1;
+      return sc;
+    };
+    let best = null;
+    let bestScore = -1;
+    for (const t of tracks) { const sc = score(t); if (sc > bestScore) { best = t; bestScore = sc; } }
+    return best;
+  }
+
   // ---- DOM -----------------------------------------------------------------
 
   const SEL = {
@@ -202,7 +229,7 @@ var MC_NFLX = (() => {
    */
   function pickWatchSession(ids) {
     if (!Array.isArray(ids) || !ids.length) return null;
-    return ids.find((i) => /^watch/i.test(String(i))) ?? ids[ids.length - 1];
+    return ids.find((i) => /^watch/i.test(String(i))) ?? null; // strict: previews/billboards have other prefixes
   }
 
   /** The active /watch player object, or null. */
@@ -335,7 +362,7 @@ var MC_NFLX = (() => {
   return {
     WEBVTT_PROFILE, FORMATS, SHAPE_MANIFEST_REQUESTS, PRUNE_KEYS, INTEREST_KEY_RE,
     manifestFromParsed, nearMissReason, manifestRequestParams, shapeManifestRequest,
-    trackDownloadUrl, describeTrack,
+    trackDownloadUrl, describeTrack, pickTrack,
     SEL, AD_TEXT_RE, AD_TOKEN_RE,
     playerApi, pickWatchSession, watchPlayer, MANIFEST_PATH, looksLikeManifest, findManifest, manifestFromPlayer,
     contentTimeMs, mediaTimeMs, adState, adBreaks,
@@ -654,18 +681,286 @@ var MC_BRIDGE = (() => {
   return { create };
 })();
 
+// ===== src/subtitles.js =====
+// @ts-check
+/*
+ * subtitles.js — WebVTT parsing and cue lookup. No DOM, no Netflix specifics.
+ *
+ * Netflix's `webvtt-lssdh-ios8` files (verified 2026-09-07): a WEBVTT header, NOTE
+ * blocks (including a SegmentIndex and a whitespace-only block), numbered cues with
+ * settings such as `position:50.00%,middle align:middle size:80.00% line:84.67%`,
+ * and text wrapped in `<c.bg_transparent>…</c.bg_transparent>`. Timestamps are
+ * content time, which is what the player's content clock reports.
+ */
+var MC_SUBS = (() => {
+  /** @typedef {{begin: number, end: number, text: string, settings: string}} Cue */
+
+  /** "hh:mm:ss.mmm" or "mm:ss.mmm" → seconds (NaN if malformed). @param {string} s */
+  function parseTimestamp(s) {
+    const m = /^(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})$/.exec(s.trim());
+    if (!m) return NaN;
+    return (+(m[1] || 0)) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4].padEnd(3, '0')) / 1000;
+  }
+
+  /** @type {Record<string, string>} */
+  const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', lrm: '‎', rlm: '‏' };
+
+  /** @param {string} t */
+  function decodeEntities(t) {
+    return t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, name) => {
+      if (name[0] === '#') {
+        const code = name[1].toLowerCase() === 'x' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : all;
+      }
+      const v = ENTITIES[name.toLowerCase()];
+      return v === undefined ? all : v;
+    });
+  }
+
+  /** Drop WebVTT/HTML-style tags (<c.x>, </c>, <i>, <v Name>, <00:00:01.000>) but keep line breaks. @param {string} t */
+  function stripTags(t) {
+    return t.replace(/<\/?[^>]*>/g, '');
+  }
+
+  /**
+   * @param {string} text
+   * @returns {{cues: Cue[], warnings: string[]}}
+   */
+  function parseWebVTT(text) {
+    /** @type {string[]} */
+    const warnings = [];
+    /** @type {Cue[]} */
+    const cues = [];
+    const norm = text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+    if (!/^WEBVTT/.test(norm)) warnings.push('missing WEBVTT header (starts with ' + JSON.stringify(norm.slice(0, 20)) + ')');
+
+    // HLS-style header mapping; Netflix files have not carried one so far, but apply it if present.
+    let offset = 0;
+    const map = /X-TIMESTAMP-MAP=([^\n]+)/.exec(norm.split(/\n[ \t]*\n/)[0] || '');
+    if (map) {
+      const mp = /MPEGTS:(\d+)/.exec(map[1]);
+      const lc = /LOCAL:([\d:.]+)/.exec(map[1]);
+      if (mp && lc) {
+        offset = (+mp[1]) / 90000 - parseTimestamp(lc[1]);
+        if (Math.abs(offset) > 0.001) warnings.push(`X-TIMESTAMP-MAP offset of ${offset.toFixed(3)}s applied`);
+      }
+    }
+
+    for (const block of norm.split(/\n[ \t]*\n+/)) {
+      const lines = block.split('\n');
+      const ti = lines.findIndex((l) => l.includes('-->'));
+      if (ti < 0) continue; // header, NOTE, STYLE, REGION, or junk
+      const [from, rest] = lines[ti].split('-->');
+      const [to, ...settings] = (rest || '').trim().split(/\s+/);
+      const begin = parseTimestamp(from) + offset;
+      const end = parseTimestamp(to || '') + offset;
+      if (!Number.isFinite(begin) || !Number.isFinite(end)) {
+        warnings.push('unparseable timing line: ' + lines[ti].slice(0, 60));
+        continue;
+      }
+      const body = decodeEntities(stripTags(lines.slice(ti + 1).join('\n'))).trim();
+      if (!body) continue;
+      cues.push({ begin, end, text: body, settings: settings.filter(Boolean).join(' ') });
+    }
+    cues.sort((a, b) => a.begin - b.begin);
+    if (!cues.length) warnings.push('no cues parsed');
+    return { cues, warnings };
+  }
+
+  /**
+   * Cues active at time t (seconds). `state.i` is a cursor that makes forward playback
+   * O(1) per frame; a backward jump falls back to a binary search.
+   * @param {Cue[]} cues sorted by begin
+   * @param {number} t
+   * @param {{i: number}} state
+   * @returns {Cue[]}
+   */
+  function activeCues(cues, t, state) {
+    if (state.i > cues.length) state.i = cues.length;
+    if (state.i > 0 && cues[state.i - 1].begin > t) {
+      let lo = 0;
+      let hi = state.i;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cues[mid].begin <= t) lo = mid + 1; else hi = mid;
+      }
+      state.i = lo;
+    }
+    while (state.i < cues.length && cues[state.i].begin <= t) state.i++;
+    /** @type {Cue[]} */
+    const out = [];
+    for (let k = state.i - 1, n = 0; k >= 0 && n < 12; k--, n++) if (cues[k].end > t) out.unshift(cues[k]);
+    return out;
+  }
+
+  /** Text form used to match a native cue against parsed cues: no whitespace, no punctuation, lower case. @param {string} t */
+  function normalizeForMatch(t) {
+    return t.toLowerCase().replace(/[\s ‎‏]+/g, '').replace(/[.,!?;:'"“”‘’\-–—…()\[\]♪]/g, '');
+  }
+
+  return { parseTimestamp, parseWebVTT, activeCues, stripTags, decodeEntities, normalizeForMatch };
+})();
+
+// ===== src/clock.js =====
+// @ts-check
+/*
+ * clock.js — the one place that answers "what content time is it, and are we in an ad?"
+ *
+ * Sources, in order:
+ *   1. player — Netflix's player API via the page hook: getSegmentTime() (content ms,
+ *               frozen during ads) plus the ad manager's adPresenting flag. Verified
+ *               2026-09-07 across mid-rolls, pre-rolls, seeks, and pauses.
+ *   2. video  — video.currentTime with no correction. Only a stopgap: media time
+ *               diverges from content time after ads and after seeks (see
+ *               docs/phase0-findings.md). Phase 3 adds native-cue calibration
+ *               (Layer C) on top of this source.
+ */
+var MC_CLOCK = (() => {
+  /**
+   * @param {{call: (name: string, arg?: any) => any}} bridge
+   * @param {() => HTMLVideoElement | null} getVideo
+   */
+  function create(bridge, getVideo) {
+    let failures = 0;
+    let warned = false;
+    let source = 'none';
+    return {
+      /** @returns {{t: number, inAd: boolean, source: string, movieId: any}} t is content seconds */
+      now() {
+        let r = null;
+        try { r = bridge.call('t'); } catch { r = null; }
+        if (r && typeof r[0] === 'number') {
+          source = 'player';
+          failures = 0;
+          return { t: r[0] / 1000, inAd: !!r[1], source, movieId: r[2] };
+        }
+        failures++;
+        if (failures === 60 && !warned) {
+          warned = true;
+          MC_UTIL.warn('player clock unavailable for 60 frames; falling back to video.currentTime with no ad correction. See MC_NFLX.watchPlayer / contentTimeMs.');
+        }
+        source = 'video';
+        const v = getVideo();
+        return { t: v ? v.currentTime : 0, inAd: false, source, movieId: null };
+      },
+      get source() { return source; },
+    };
+  }
+  return { create };
+})();
+
+// ===== src/overlay.js =====
+// @ts-check
+/*
+ * overlay.js — the subtitle layer drawn over Netflix's video. DOM only; no timing logic.
+ *
+ * Placement (verified 2026-09-07): the <video> is position:absolute inside a
+ * position:relative box that also holds Netflix's own `.player-timedtext`; that box is
+ * the visible picture (the video element itself can be taller and is clipped). We add
+ * one sibling to the box. Styles go through CSSOM so the page's CSP cannot block them.
+ */
+var MC_OVERLAY = (() => {
+  const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const ROOT_CSS = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 5% 7%;box-sizing:border-box;z-index:1;';
+  const LINE_CSS = 'color:#fff;text-align:center;white-space:pre-line;line-height:1.3;max-width:90%;margin:0.1em 0;padding:0.05em 0.4em;font-weight:500;font-family:' + FONT + ';text-shadow:0 0 6px rgba(0,0,0,.9),0 0 2px #000,1px 1px 2px #000;';
+  /** Per-line font scale relative to the base size (index 0 = first configured track). */
+  const LINE_SCALE = [1, 1.15];
+  /** Base font size as a fraction of the picture box height. */
+  const BASE_SIZE_RATIO = 0.042;
+
+  function create() {
+    /** @type {HTMLDivElement | null} */
+    let root = null;
+    /** @type {HTMLDivElement[]} */
+    let lines = [];
+    /** @type {HTMLElement | null} */
+    let host = null;
+    /** @type {ResizeObserver | null} */
+    let ro = null;
+    /** @type {string[]} */
+    let lastTexts = [];
+    let lastVisible = true;
+
+    function fit() {
+      if (!root || !host) return;
+      const h = host.getBoundingClientRect().height;
+      if (h > 0) root.style.fontSize = Math.max(14, Math.round(h * BASE_SIZE_RATIO)) + 'px';
+    }
+
+    /**
+     * Mount next to `video`. Re-entrant: a no-op when already mounted in the same box.
+     * @param {HTMLVideoElement} video @param {number} lineCount
+     */
+    function attach(video, lineCount) {
+      const parent = video.parentElement;
+      if (!parent) return false;
+      if (root && host === parent && root.isConnected && lines.length === lineCount) return true;
+      detach();
+      host = parent;
+      root = document.createElement('div');
+      root.className = 'multicap-overlay';
+      root.style.cssText = ROOT_CSS;
+      for (let i = 0; i < lineCount; i++) {
+        const el = document.createElement('div');
+        el.className = 'multicap-line multicap-line-' + i;
+        el.style.cssText = LINE_CSS + 'font-size:' + (LINE_SCALE[i] ?? 1) + 'em;display:none;';
+        root.appendChild(el);
+        lines.push(el);
+      }
+      host.appendChild(root);
+      ro = new ResizeObserver(fit);
+      ro.observe(host);
+      fit();
+      lastTexts = [];
+      lastVisible = true;
+      return true;
+    }
+
+    function detach() {
+      if (ro) { ro.disconnect(); ro = null; }
+      if (root) root.remove();
+      root = null;
+      host = null;
+      lines = [];
+      lastTexts = [];
+    }
+
+    /**
+     * @param {string[]} texts one per line ('' hides that line)
+     * @param {boolean} visible false blanks everything (ads, pause ads, user toggle)
+     */
+    function render(texts, visible) {
+      if (!root) return;
+      if (visible !== lastVisible) {
+        lastVisible = visible;
+        root.style.visibility = visible ? '' : 'hidden';
+      }
+      for (let i = 0; i < lines.length; i++) {
+        const t = texts[i] ?? '';
+        if (t === lastTexts[i]) continue;
+        lastTexts[i] = t;
+        lines[i].textContent = t;
+        lines[i].style.display = t ? '' : 'none';
+      }
+    }
+
+    return { attach, detach, render, get mounted() { return !!(root && root.isConnected); } };
+  }
+  return { create };
+})();
+
 // ===== src/content.js =====
 // @ts-check
 /*
  * content.js — extension side (isolated world), document_start.
  *
- * Phase 0: instrumentation only. Watches the <video> element, the player DOM
- * (for ad UI appearing / disappearing, via data-uia diffs and ad-word text),
- * Netflix's native subtitle layer, and the URL, and stamps every observation
- * with video.currentTime (media time). Also asks the page hook for the player
- * API clock so the two can be compared over time.
+ * Owns the playback session: when the page hook reports a manifest, pick the
+ * configured track, fetch and parse its WebVTT, mount the overlay next to the
+ * <video>, and drive it from the content clock on requestAnimationFrame.
  *
- * Nothing here renders anything yet.
+ * Keeps the Phase 0 instrumentation (video events, data-uia diffs, ad text,
+ * native subtitle cues, URL changes), stamped with media time, because it is
+ * how breakage gets diagnosed.
  */
 (() => {
   if (typeof MC_UTIL === 'undefined' || typeof MC_NFLX === 'undefined' || typeof MC_BRIDGE === 'undefined') {
@@ -679,7 +974,7 @@ var MC_BRIDGE = (() => {
 
   /** @type {ReturnType<typeof U.ring<{t: number, media: number | null, kind: string, detail: string}>>} */
   const timeline = U.ring(3000);
-  /** @type {ReturnType<typeof U.ring<{media: number | null, text: string}>>} */
+  /** @type {ReturnType<typeof U.ring<{media: number | null, content: number, text: string}>>} */
   const nativeCues = U.ring(300);
   /** @type {Map<string, {first: number | null, adds: number, removes: number, muted: boolean}>} */
   const uiaStats = new Map();
@@ -734,6 +1029,7 @@ var MC_BRIDGE = (() => {
     const gen = ++videoGen;
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
+    if (session) overlay.attach(v, WANT_LANGS.length);
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
@@ -751,7 +1047,7 @@ var MC_BRIDGE = (() => {
     if (v !== video) {
       if (video && !video.isConnected) mark('video:detached', `#${videoGen}`);
       if (v) attachVideo(v);
-      else if (video) { mark('video:gone'); video = null; }
+      else if (video) { mark('video:gone'); video = null; overlay.detach(); }
     }
     if (video) lastSeenTime = video.currentTime;
   }
@@ -788,7 +1084,7 @@ var MC_BRIDGE = (() => {
     const now = new Set();
     for (const el of root.querySelectorAll('[data-uia]')) now.add(el.getAttribute('data-uia') ?? '');
     if (!uiaPrev.size && now.size) {
-      mark('uia:baseline', `${now.size} values: ${[...now].join('  ')}`);
+      mark('uia:baseline', `${now.size} values: ${[...now].join('  ')}`, { quiet: true });
       for (const v of now) uiaStats.set(v, { first: mt(), adds: 1, removes: 0, muted: false });
       uiaPrev = now;
       return;
@@ -811,7 +1107,7 @@ var MC_BRIDGE = (() => {
       mark('uia:mute', `${v} flips too often; muting`, { quiet: true });
       return;
     }
-    mark(`uia${sign}`, v + (adLike ? '   <== AD-LIKE' : ''), { quiet: !adLike && flips > 6 });
+    mark(`uia${sign}`, v + (adLike ? '   <== AD-LIKE' : ''), { quiet: !adLike });
   }
 
   /** @type {Map<string, number>} */
@@ -863,15 +1159,18 @@ var MC_BRIDGE = (() => {
     if (!el) { mark('native:gone', `${N.SEL.timedtext} left the DOM`); return; }
     const cs = getComputedStyle(el);
     mark('native:attach', `${N.SEL.timedtext} found (opacity=${cs.opacity} display=${cs.display} visibility=${cs.visibility})`);
+    applyNativeVisibility();
     const obs = new MutationObserver(() => {
       if (ttEl !== el) { obs.disconnect(); return; }
       const t = (el.textContent || '').trim().replace(/\s+/g, ' ');
       if (t === ttLast) return;
       ttLast = t;
       ttCount++;
-      nativeCues.push({ media: mt(), text: t });
-      if (ttCount <= 25) mark('native:cue', t ? `"${t.slice(0, 80)}"` : '(cleared)');
-      else if (ttCount === 26) mark('native:cue', '… further native cue changes recorded silently (see summary)');
+      const c = clock.now();
+      nativeCues.push({ media: mt(), content: c.t, text: t });
+      if (t) onNativeCue(t, c.t);
+      if (ttCount <= 8) mark('native:cue', t ? `content=${c.t.toFixed(3)} "${t.slice(0, 80)}"` : '(cleared)');
+      else if (ttCount === 9) mark('native:cue', '… further native cue changes recorded silently (see summary / __multicap.sync())');
     });
     obs.observe(el, { subtree: true, childList: true, characterData: true });
   }
@@ -888,7 +1187,7 @@ var MC_BRIDGE = (() => {
     mark('url', lastHref);
     clearTimeout(watchdog);
     const id = N.watchIdFromUrl(lastHref);
-    if (!id) return;
+    if (!id) { stopSession('left /watch'); return; }
     watchSince = Date.now();
     watchdog = setTimeout(() => {
       const ms = /** @type {any[]} */ (U.safe(() => bridge.call('manifests'), []) ?? []);
@@ -897,10 +1196,137 @@ var MC_BRIDGE = (() => {
     }, WATCHDOG_MS);
   }
 
+  // ---- session: track → cues → overlay, driven by the content clock -------------------
+
+  /** Languages to render, in line order. Phase 1 renders one; Phase 2 adds the second + a picker. */
+  const WANT_LANGS = ['en'];
+  const clock = MC_CLOCK.create(bridge, () => video);
+  const overlay = MC_OVERLAY.create();
+  let overlayEnabled = true;
+  let pauseAdPresent = false;
+
+  /** @typedef {{movieId: any, track: any, cues: Array<{begin: number, end: number, text: string, settings: string}>, cursor: {i: number}, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
+  /** @type {Session | null} */
+  let session = null;
+
+  /** @param {any} movieId */
+  async function startSession(movieId) {
+    if (session && String(session.movieId) === String(movieId)) return;
+    stopSession('new manifest');
+    const tracks = /** @type {any[]} */ (U.safe(() => bridge.call('tracks', movieId), []) ?? []);
+    const pick = N.pickTrack(tracks, WANT_LANGS[0]);
+    if (!pick) {
+      U.warn(`no '${WANT_LANGS[0]}' text track with WebVTT for movieId=${movieId}; available: ${tracks.map((t) => `${t.lang}${t.url ? '' : '(no url)'}`).join(', ') || 'none'}`);
+      return;
+    }
+    /** @type {Session} */
+    const s = { movieId, track: pick, cues: [], cursor: { i: 0 }, raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0 };
+    session = s;
+    mark('session:start', `movieId=${movieId} track=${pick.lang} "${pick.name}" (${pick.raw})`);
+    let text = '';
+    try {
+      const resp = await fetch(pick.url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      text = await resp.text();
+    } catch (err) {
+      U.warn(`subtitle fetch failed for ${pick.lang} (${String(err).slice(0, 120)}); no overlay for movieId=${movieId}`);
+      if (session === s) session = null;
+      return;
+    }
+    if (session !== s) return; // superseded while fetching
+    const parsed = MC_SUBS.parseWebVTT(text);
+    for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
+    s.cues = parsed.cues;
+    if (!s.cues.length) { session = null; return; }
+    mark('session:ready', `${s.cues.length} cues; first @${s.cues[0].begin.toFixed(3)}s "${s.cues[0].text.slice(0, 40)}"; last ends @${s.cues[s.cues.length - 1].end.toFixed(1)}s`);
+    if (video) overlay.attach(video, WANT_LANGS.length);
+    applyNativeVisibility();
+    s.raf = requestAnimationFrame(frame);
+  }
+
+  /** @param {string} why */
+  function stopSession(why) {
+    if (!session) return;
+    session.stopped = true;
+    cancelAnimationFrame(session.raf);
+    mark('session:stop', `movieId=${session.movieId} (${why})`);
+    session = null;
+    overlay.detach();
+    applyNativeVisibility();
+  }
+
+  function frame() {
+    const s = session;
+    if (!s || s.stopped) return;
+    s.raf = requestAnimationFrame(frame);
+    if (!video || !video.isConnected) return;
+    if (!overlay.mounted) overlay.attach(video, WANT_LANGS.length);
+    const c = clock.now();
+    const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
+    const hidden = wrongMovie || c.inAd || !overlayEnabled || pauseAdPresent;
+    const text = hidden ? '' : MC_SUBS.activeCues(s.cues, c.t, s.cursor).map((x) => x.text).join('\n');
+    const key = text + (hidden ? '|hidden' : '');
+    if (key === s.lastKey) return;
+    s.lastKey = key;
+    s.cueChanges++;
+    overlay.render([text], !hidden);
+    if (text) mark('cue', `content=${c.t.toFixed(3)} "${text.slice(0, 60)}"`, { quiet: true });
+  }
+
+  /** Netflix's own subtitle layer: invisible while we render (it keeps updating, which Layer C needs). */
+  function applyNativeVisibility() {
+    if (ttEl instanceof HTMLElement) ttEl.style.opacity = session ? '0' : '';
+  }
+
+  function sessionSummary() {
+    if (!session) return { active: false, clockSource: clock.source, overlayEnabled };
+    const c = clock.now();
+    const active = MC_SUBS.activeCues(session.cues, c.t, { i: session.cursor.i });
+    return {
+      active: true, movieId: session.movieId, track: `${session.track.lang} "${session.track.name}" (${session.track.raw})`,
+      cues: session.cues.length, cueChanges: session.cueChanges, overlayMounted: overlay.mounted, overlayEnabled,
+      clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
+      showing: active.map((x) => x.text), pauseAdPresent,
+    };
+  }
+
+  // ---- Layer C measurement: native cue text vs parsed cue timing --------------------------
+  // For every native cue that appears, find the parsed cue with the same normalized text
+  // near the current content time and record (contentTime − cue.begin). Zero means the
+  // player's clock and the WebVTT agree; a step means an ad offset we failed to account for.
+  /** @type {ReturnType<typeof U.ring<{content: number, begin: number, delta: number, text: string}>>} */
+  const syncSamples = U.ring(200);
+  let unmatchedNative = 0;
+
+  /** @param {string} nativeText @param {number} contentTime */
+  function onNativeCue(nativeText, contentTime) {
+    if (!session || !session.cues.length) return;
+    const want = MC_SUBS.normalizeForMatch(nativeText);
+    if (!want) return;
+    let best = null;
+    let bestDist = Infinity;
+    for (const cue of session.cues) {
+      if (Math.abs(cue.begin - contentTime) > 20) continue;
+      if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
+      const d = Math.abs(cue.begin - contentTime);
+      if (d < bestDist) { best = cue; bestDist = d; }
+    }
+    if (!best) { unmatchedNative++; return; }
+    syncSamples.push({ content: +contentTime.toFixed(3), begin: best.begin, delta: +(contentTime - best.begin).toFixed(3), text: nativeText.slice(0, 40) });
+  }
+
+  function syncReport() {
+    const items = syncSamples.items();
+    const deltas = items.map((x) => x.delta).sort((a, b) => a - b);
+    const median = deltas.length ? deltas[deltas.length >> 1] : null;
+    return { matched: items.length, unmatched: unmatchedNative, medianDelta: median, minDelta: deltas[0] ?? null, maxDelta: deltas[deltas.length - 1] ?? null, last: items.slice(-8) };
+  }
+
   // ---- bridge wiring -----------------------------------------------------------------
 
   bridge.on('manifest', (m) => {
     mark('manifest', `movieId=${m.movieId} dur=${m.durationMs}ms tracks=${m.trackCount} adverts=${m.advertsSummary} aux=${m.auxCount}`);
+    if (N.watchIdFromUrl(location.href)) startSession(m.movieId);
     setTimeout(() => {
       const p = U.safe(() => bridge.call('probe'), null);
       if (!p) mark('probe', 'bridge call failed');
@@ -915,8 +1341,15 @@ var MC_BRIDGE = (() => {
     timeline: timeline.items(),
     uia: [...uiaStats].map(([v, s]) => ({ v, ...s })),
     nativeCueCount: ttCount,
-    nativeCues: nativeCues.items().slice(0, 40),
+    nativeCues: nativeCues.items().slice(-40),
+    session: sessionSummary(),
   }));
+  bridge.handle('session', sessionSummary);
+  bridge.handle('overlay-set', (/** @type {{enabled?: boolean}} */ opts) => {
+    if (opts && typeof opts.enabled === 'boolean') overlayEnabled = opts.enabled;
+    return { enabled: overlayEnabled };
+  });
+  bridge.handle('sync', syncReport);
 
   // ---- boot --------------------------------------------------------------------------
 
@@ -937,6 +1370,8 @@ var MC_BRIDGE = (() => {
   function domAdTick() {
     const now = !!document.querySelector(N.SEL.adsInfo);
     if (now !== domAd) { domAd = now; mark('dom-ad', now ? `ON (${N.SEL.adsInfo} present)` : 'OFF'); }
+    const pa = !!document.querySelector(N.SEL.pauseAd);
+    if (pa !== pauseAdPresent) { pauseAdPresent = pa; mark('pause-ad', pa ? 'ON' : 'OFF', { quiet: true }); }
   }
 
   function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); }
@@ -944,7 +1379,7 @@ var MC_BRIDGE = (() => {
   function boot() {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
     setInterval(tick, 500);
-    setInterval(clockTick, 5000);
+    setInterval(clockTick, 10000);
     const pong = U.safe(() => bridge.call('ping'), null);
     if (pong !== 'pong') U.warn('page hook (MAIN world) not reachable — JSON hooks are NOT active. Check manifest.json content_scripts and that Chrome ≥ 111.');
     else U.log('phase-0 instrumentation active; page hook reachable. In the page console: __multicap.help()');
