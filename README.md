@@ -13,6 +13,15 @@ persists the two slots, size/height/per-line/backdrop styling, and the pinyin
 toggle across titles. `Ctrl+Shift+H` hides/shows the overlay. Verified live on
 the ads plan 2026-09-07 (see `docs/phase0-findings.md`).
 
+**Reading assist.** Each Chinese caption gets a reading time of characters ×
+seconds-per-character. Three layers, all in the panel: captions are extended
+into following silence (whole-transcript, so it holds under seeks; on by
+default), and optionally the player pauses just before a caption would vanish
+(resuming when the time is met), slows the caption down (floored at a
+configurable rate), or slows and then pauses. Only pauses the extension started
+are ever resumed; a manual pause, resume, seek, or ad cancels the plan.
+`Ctrl+Shift+P` toggles the mode.
+
 **Pinyin.** The Simplified line gets per-character ruby with tone marks, from
 `data/pinyin.json`: 80k words/phrases and 5.1k characters built by
 `npm run build:pinyin` from the DuiDuiDui records corpus (word readings are
@@ -36,6 +45,7 @@ order. Traditional lines are not annotated.
 | `src/overlay.js` | isolated | The subtitle layer: mounted next to `<video>`, CSSOM-styled, sized from the picture box. |
 | `src/settings.js` | isolated | Two language slots + enabled flag in `chrome.storage.local`. |
 | `src/pinyin.js` | isolated | Dictionary loader and annotator (word → syllables per character). |
+| `src/assist.js` | isolated | Reading assist: per-caption pause / slow / slow-then-pause plan. |
 | `src/picker.js` | isolated | The pill and the track/style panel, mounted inside the player view (survives fullscreen). |
 | `tools/build-pinyin.js` | | Builds `data/pinyin.json` from the DuiDuiDui records directory. |
 | `src/content.js` | isolated | Session per manifest (resolve slots → fetch → parse → render on rAF), picker wiring, shortcuts, plus the Phase 0 instrumentation: `<video>` events, `data-uia` diffs, ad text, native cues, URL changes. |
