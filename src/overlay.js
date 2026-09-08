@@ -127,9 +127,9 @@ var MC_OVERLAY = (() => {
 
     /**
      * What the reading assist is doing right now, shown as a chip under the lines:
-     * a bar that drains over `ms` (auto-resume) or sits full (manual resume), or the
-     * rate while playing slowed. No words or icons while holding: they distract.
-     * @param {{holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}} st
+     * a bar that drains over `ms` (auto-resume) or sits full (manual resume).
+     * No words or icons: they distract.
+     * @param {{holding: boolean, ms?: number, autoResume?: boolean}} st
      */
     function setIndicator(st) {
       if (!chip) return;
@@ -147,12 +147,6 @@ var MC_OVERLAY = (() => {
           fill.style.transition = `width ${Math.round(st.ms)}ms linear`;
           fill.style.width = '0%';
         }
-        return;
-      }
-      if (st.rate != null && st.rate < 0.995) {
-        label.textContent = `▶ ${st.rate.toFixed(2)}×`;
-        track.style.display = 'none';
-        c.style.display = 'inline-flex';
         return;
       }
       c.style.display = 'none';

@@ -13,7 +13,7 @@ var MC_SETTINGS = (() => {
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line;
    * rubyUnder: pinyin below the characters (true) or above them (false).
    */
-  /** @typedef {{mode: 'off' | 'pause' | 'slow' | 'slowpause', secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean, lastMode: 'pause' | 'slow' | 'slowpause'}} Assist */
+  /** @typedef {{mode: 'off' | 'pause', secondsPerChar: number, autoResume: boolean, extend: boolean}} Assist */
   /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
@@ -22,9 +22,9 @@ var MC_SETTINGS = (() => {
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
   /** @type {Assist} */
-  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true, lastMode: 'slowpause' };
-  const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0], minRate: [0.3, 1.0] };
-  const ASSIST_MODES = ['off', 'pause', 'slow', 'slowpause'];
+  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true };
+  const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
+  const ASSIST_MODES = ['off', 'pause'];
   const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
@@ -59,11 +59,10 @@ var MC_SETTINGS = (() => {
     st.rubyUnder = st.rubyUnder !== false;
     s.style = st;
     const a = { ...DEFAULT_ASSIST, ...(s.assist && typeof s.assist === 'object' ? s.assist : {}) };
-    a.mode = ASSIST_MODES.includes(a.mode) ? a.mode : 'off';
-    a.lastMode = ASSIST_MODES.includes(a.lastMode) && a.lastMode !== 'off' ? a.lastMode : DEFAULT_ASSIST.lastMode;
-    if (a.mode !== 'off') a.lastMode = a.mode;
+    a.mode = a.mode === 'slow' || a.mode === 'slowpause' ? 'pause' : ASSIST_MODES.includes(a.mode) ? a.mode : 'off'; // slow modes were removed
+    delete a.minRate;
+    delete a.lastMode;
     a.secondsPerChar = clamp(a.secondsPerChar, ASSIST_RANGES.secondsPerChar, DEFAULT_ASSIST.secondsPerChar);
-    a.minRate = clamp(a.minRate, ASSIST_RANGES.minRate, DEFAULT_ASSIST.minRate);
     a.autoResume = a.autoResume !== false;
     a.extend = a.extend !== false;
     s.assist = a;

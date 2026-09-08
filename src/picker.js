@@ -28,7 +28,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, minRate?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -41,8 +41,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean}}} */
-    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true } };
+    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}} */
+    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -242,7 +242,7 @@ var MC_PICKER = (() => {
       // ---- reading assist ----
       panel.appendChild(el('Reading assist', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;'));
       const as = state.assist;
-      const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes'], ['slow', 'Slow the caption down'], ['slowpause', 'Slow, then pause if still needed']];
+      const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes']];
       for (const [value, label] of modes) {
         const row = document.createElement('label');
         row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;';
@@ -254,7 +254,6 @@ var MC_PICKER = (() => {
         panel.appendChild(row);
       }
       slider('Per character', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + 's', (v) => handlers.onAssist({ secondsPerChar: v }));
-      slider('Slowest speed', as.minRate, MC_SETTINGS.ASSIST_RANGES.minRate, 0.05, (v) => v.toFixed(2) + 'x', (v) => handlers.onAssist({ minRate: v }));
       const ex = document.createElement('label');
       ex.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
       const exc = document.createElement('input');

@@ -272,8 +272,6 @@
   const assist = MC_ASSIST.create({
     pause: () => { U.safe(() => bridge.call('pause')); },
     play: resumePlayback,
-    setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
-    getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
     sample: () => assistFrame(),
     indicate: (st) => { overlay.setIndicator(st); if (st.holding) setHoldingUi(true); else if (holdingUi) startResumeGrace(); },
   }, (msg) => mark('assist', msg));
@@ -570,7 +568,7 @@
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
-    else if (e.code === 'KeyP') { const a = MC_SETTINGS.get().assist; MC_SETTINGS.save({ assist: { mode: a.mode === 'off' ? a.lastMode : 'off' } }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { mode: MC_SETTINGS.get().assist.mode === 'off' ? 'pause' : 'off' } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   function sessionSummary() {

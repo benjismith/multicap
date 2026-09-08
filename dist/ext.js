@@ -1158,9 +1158,9 @@ var MC_OVERLAY = (() => {
 
     /**
      * What the reading assist is doing right now, shown as a chip under the lines:
-     * a bar that drains over `ms` (auto-resume) or sits full (manual resume), or the
-     * rate while playing slowed. No words or icons while holding: they distract.
-     * @param {{holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}} st
+     * a bar that drains over `ms` (auto-resume) or sits full (manual resume).
+     * No words or icons: they distract.
+     * @param {{holding: boolean, ms?: number, autoResume?: boolean}} st
      */
     function setIndicator(st) {
       if (!chip) return;
@@ -1178,12 +1178,6 @@ var MC_OVERLAY = (() => {
           fill.style.transition = `width ${Math.round(st.ms)}ms linear`;
           fill.style.width = '0%';
         }
-        return;
-      }
-      if (st.rate != null && st.rate < 0.995) {
-        label.textContent = `▶ ${st.rate.toFixed(2)}×`;
-        track.style.display = 'none';
-        c.style.display = 'inline-flex';
         return;
       }
       c.style.display = 'none';
@@ -1261,7 +1255,7 @@ var MC_SETTINGS = (() => {
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line;
    * rubyUnder: pinyin below the characters (true) or above them (false).
    */
-  /** @typedef {{mode: 'off' | 'pause' | 'slow' | 'slowpause', secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean, lastMode: 'pause' | 'slow' | 'slowpause'}} Assist */
+  /** @typedef {{mode: 'off' | 'pause', secondsPerChar: number, autoResume: boolean, extend: boolean}} Assist */
   /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
@@ -1270,9 +1264,9 @@ var MC_SETTINGS = (() => {
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
   /** @type {Assist} */
-  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true, lastMode: 'slowpause' };
-  const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0], minRate: [0.3, 1.0] };
-  const ASSIST_MODES = ['off', 'pause', 'slow', 'slowpause'];
+  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true };
+  const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
+  const ASSIST_MODES = ['off', 'pause'];
   const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
@@ -1307,11 +1301,10 @@ var MC_SETTINGS = (() => {
     st.rubyUnder = st.rubyUnder !== false;
     s.style = st;
     const a = { ...DEFAULT_ASSIST, ...(s.assist && typeof s.assist === 'object' ? s.assist : {}) };
-    a.mode = ASSIST_MODES.includes(a.mode) ? a.mode : 'off';
-    a.lastMode = ASSIST_MODES.includes(a.lastMode) && a.lastMode !== 'off' ? a.lastMode : DEFAULT_ASSIST.lastMode;
-    if (a.mode !== 'off') a.lastMode = a.mode;
+    a.mode = a.mode === 'slow' || a.mode === 'slowpause' ? 'pause' : ASSIST_MODES.includes(a.mode) ? a.mode : 'off'; // slow modes were removed
+    delete a.minRate;
+    delete a.lastMode;
     a.secondsPerChar = clamp(a.secondsPerChar, ASSIST_RANGES.secondsPerChar, DEFAULT_ASSIST.secondsPerChar);
-    a.minRate = clamp(a.minRate, ASSIST_RANGES.minRate, DEFAULT_ASSIST.minRate);
     a.autoResume = a.autoResume !== false;
     a.extend = a.extend !== false;
     s.assist = a;
@@ -1470,13 +1463,11 @@ var MC_PINYIN = (() => {
  * assist.js — reading assist: give each Chinese caption a minimum on-screen time.
  *
  * Reading time = Han characters in the caption × secondsPerChar, measured in wall time
- * from the caption's first frame. Modes:
- *   pause      — stop just before the caption would vanish; resume when the time is met.
- *   slow       — lower the playback rate for this caption so it lasts long enough
- *                (floored at minRate), restore the rate when it ends.
- *   slowpause  — slow first, then pause for whatever the floor could not cover.
+ * from the caption's first frame. Mode `pause`: stop just before the caption would vanish
+ * and resume when the time is met. (A slowed-playback mode existed briefly; Chrome's
+ * pitch-preserving resampling sounds bad, so it was removed.)
  * Only pauses we started are resumed. A manual pause, a manual resume, a seek, or an ad
- * cancels the current caption's plan. Everything here is driven from the render loop.
+ * cancels the current caption's plan. Driven from the render loop plus a wall-clock timer.
  */
 var MC_ASSIST = (() => {
   const HAN_RE = /\p{Script=Han}/gu;
@@ -1485,23 +1476,23 @@ var MC_ASSIST = (() => {
   /** Don't bother pausing for less than this. */
   const MIN_PAUSE_S = 0.2;
 
-  /** @typedef {{mode: 'off' | 'pause' | 'slow' | 'slowpause', secondsPerChar: number, minRate: number, autoResume: boolean}} Config */
-  /** @typedef {{key: string, chars: number, required: number, startWall: number, end: number, baseRate: number, slowed: number | null, pausedByUs: boolean, acted: boolean, resumeHandle: number, actHandle: number}} Caption */
+  /** @typedef {{mode: 'off' | 'pause', secondsPerChar: number, autoResume: boolean}} Config */
+  /** @typedef {{key: string, chars: number, required: number, startWall: number, end: number, pausedByUs: boolean, acted: boolean, resumeHandle: number, actHandle: number}} Caption */
   /** @typedef {{t: number, wall: number, paused: boolean, inAd: boolean, zh: string, end: number}} Frame */
 
   /**
-   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number, sample?: () => Frame | null, indicate?: (st: {holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}) => void}} actions
+   * @param {{pause: () => void, play: () => void, sample?: () => Frame | null, indicate?: (st: {holding: boolean, ms?: number, autoResume?: boolean}) => void}} actions
    *   `sample` returns a fresh frame on demand; the render loop can run at a few frames per
    *   second (observed ~10 fps), so the moment to act is scheduled with a timer as well.
    * @param {(msg: string) => void} log
    */
   function create(actions, log) {
     /** @type {Config} */
-    let cfg = { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true };
+    let cfg = { mode: 'off', secondsPerChar: 0.4, autoResume: true };
     /** @type {Caption | null} */
     let cap = null;
     let expectingPause = false;
-    const stats = { captions: 0, slowed: 0, paused: 0, resumed: 0, cancelled: 0 };
+    const stats = { captions: 0, paused: 0, resumed: 0, cancelled: 0 };
     /** Last decisions, for diagnosing "it didn't pause" reports. */
     const trace = MC_UTIL.ring(40);
     /** @type {{t: number, paused: boolean} | null} last frame seen for the current caption */
@@ -1510,7 +1501,7 @@ var MC_ASSIST = (() => {
     let frameGapMs = 0;
     /** @param {string} ev @param {Record<string, any>} [x] */
     const tr = (ev, x = {}) => trace.push({ ev, at: +(performance.now() / 1000).toFixed(1), ...x });
-    /** Tell the overlay what we are doing. @param {{holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}} st */
+    /** Tell the overlay what we are doing. @param {{holding: boolean, ms?: number, autoResume?: boolean}} st */
     const indicate = (st) => { if (actions.indicate) { try { actions.indicate(st); } catch { /* overlay gone */ } } };
 
     /** @param {Partial<Config>} c */
@@ -1519,14 +1510,13 @@ var MC_ASSIST = (() => {
       if (cfg.mode === 'off') reset();
     }
 
-    /** Drop the current caption's plan: restore the rate, cancel a pending resume. Never resumes a pause. */
+    /** Drop the current caption's plan: cancel pending timers. Never resumes a pause. */
     function reset() {
       if (!cap) return;
       if (!cap.acted) tr('drop-unacted', { key: cap.key.slice(0, 12), end: cap.end, lastT: lastFrame && lastFrame.t, lastPaused: lastFrame && lastFrame.paused });
-      if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* player gone */ } }
       if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
       if (cap.actHandle) clearTimeout(cap.actHandle);
-      if (cap.slowed != null || cap.pausedByUs) indicate({ holding: false, rate: null });
+      if (cap.pausedByUs) indicate({ holding: false });
       cap = null;
       lastFrame = null;
     }
@@ -1536,9 +1526,8 @@ var MC_ASSIST = (() => {
      * @param {Caption} c @param {Frame} f
      */
     function scheduleAct(c, f) {
-      if (cfg.mode === 'slow' || f.paused) return;
-      const rate = c.slowed ?? c.baseRate ?? 1;
-      const ms = Math.max(0, ((c.end - EPS - f.t) / (rate || 1)) * 1000) + 5;
+      if (f.paused) return;
+      const ms = Math.max(0, (c.end - EPS - f.t) * 1000) + 5;
       c.actHandle = window.setTimeout(() => {
         if (cap !== c || c.acted || !actions.sample) return;
         const g = actions.sample();
@@ -1548,17 +1537,16 @@ var MC_ASSIST = (() => {
       }, ms);
     }
 
-    /** The caption is about to vanish: restore the rate, then pause if reading time is still owed. @param {Frame} f */
+    /** The caption is about to vanish: pause if reading time is still owed. @param {Frame} f */
     function act(f) {
       const c = cap;
       if (!c || c.acted) return;
       c.acted = true;
       if (c.actHandle) { clearTimeout(c.actHandle); c.actHandle = 0; }
       tr('act', { t: +f.t.toFixed(3), elapsed: +((f.wall - c.startWall) / 1000).toFixed(2), required: c.required });
-      if (c.slowed != null) { actions.setRate(c.baseRate); c.slowed = null; indicate({ holding: false, rate: null }); }
       const elapsed = (f.wall - c.startWall) / 1000;
       const needed = c.required - elapsed;
-      if (needed < MIN_PAUSE_S || cfg.mode === 'slow') return;
+      if (needed < MIN_PAUSE_S) return;
       c.pausedByUs = true;
       expectingPause = true;
       stats.paused++;
@@ -1585,23 +1573,9 @@ var MC_ASSIST = (() => {
       if (!cap || cap.key !== key) {
         reset();
         const chars = (f.zh.match(HAN_RE) || []).length;
-        cap = { key, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, baseRate: 1, slowed: null, pausedByUs: false, acted: false, resumeHandle: 0, actHandle: 0 };
+        cap = { key, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, pausedByUs: false, acted: false, resumeHandle: 0, actHandle: 0 };
         stats.captions++;
         tr('new', { key: key.slice(0, 12), t: +f.t.toFixed(3), end: +f.end.toFixed(3), chars, paused: f.paused });
-        if (cfg.mode !== 'pause' && !f.paused) {
-          const natural = f.end - f.t; // content seconds left ≈ wall seconds at the base rate
-          if (natural > 0.05 && natural < cap.required) {
-            const base = Number(actions.getRate()) || 1;
-            cap.baseRate = base;
-            const rate = Math.max(cfg.minRate, natural / cap.required) * base;
-            if (rate < base - 0.01) {
-              actions.setRate(Math.round(rate * 100) / 100);
-              cap.slowed = rate;
-              stats.slowed++;
-              indicate({ holding: false, rate: Math.round(rate * 100) / 100 });
-            }
-          }
-        }
         scheduleAct(cap, f);
         return;
       }
@@ -1617,7 +1591,7 @@ var MC_ASSIST = (() => {
       cap.pausedByUs = false;
       cap.resumeHandle = 0;
       stats.resumed++;
-      indicate({ holding: false, rate: null });
+      indicate({ holding: false });
       tr('resume', { why });
       log(`assist: resumed (${why})`);
       actions.play();
@@ -1628,13 +1602,12 @@ var MC_ASSIST = (() => {
       if (expectingPause) { expectingPause = false; tr('pause-ours'); return; }
       tr('pause-manual', { cap: cap ? cap.key.slice(0, 12) : null, pausedByUs: cap ? cap.pausedByUs : null });
       if (cap) { // manual pause: leave it alone, and don't act again on this caption
-        if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* ignore */ } cap.slowed = null; }
         if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
         if (cap.actHandle) { clearTimeout(cap.actHandle); cap.actHandle = 0; }
         cap.pausedByUs = false;
         cap.acted = true;
         stats.cancelled++;
-        indicate({ holding: false, rate: null });
+        indicate({ holding: false });
       }
     }
 
@@ -1646,12 +1619,12 @@ var MC_ASSIST = (() => {
         cap.pausedByUs = false;
         cap.resumeHandle = 0;
         stats.cancelled++;
-        indicate({ holding: false, rate: null });
+        indicate({ holding: false });
       }
     }
 
     function status() {
-      return { mode: cfg.mode, secondsPerChar: cfg.secondsPerChar, minRate: cfg.minRate, autoResume: cfg.autoResume, frameGapMs: Math.round(frameGapMs), stats, current: cap ? { chars: cap.chars, required: +cap.required.toFixed(2), slowed: cap.slowed, pausedByUs: cap.pausedByUs, acted: cap.acted } : null, trace: trace.items() };
+      return { mode: cfg.mode, secondsPerChar: cfg.secondsPerChar, autoResume: cfg.autoResume, frameGapMs: Math.round(frameGapMs), stats, current: cap ? { chars: cap.chars, required: +cap.required.toFixed(2), pausedByUs: cap.pausedByUs, acted: cap.acted } : null, trace: trace.items() };
     }
 
     return { configure, update, reset, resume, onVideoPause, onVideoPlay, status, get holding() { return !!(cap && cap.pausedByUs); } };
@@ -1691,7 +1664,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, minRate?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1704,8 +1677,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, minRate: number, autoResume: boolean, extend: boolean}}} */
-    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, minRate: 0.5, autoResume: true, extend: true } };
+    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}} */
+    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1905,7 +1878,7 @@ var MC_PICKER = (() => {
       // ---- reading assist ----
       panel.appendChild(el('Reading assist', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;'));
       const as = state.assist;
-      const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes'], ['slow', 'Slow the caption down'], ['slowpause', 'Slow, then pause if still needed']];
+      const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes']];
       for (const [value, label] of modes) {
         const row = document.createElement('label');
         row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;';
@@ -1917,7 +1890,6 @@ var MC_PICKER = (() => {
         panel.appendChild(row);
       }
       slider('Per character', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + 's', (v) => handlers.onAssist({ secondsPerChar: v }));
-      slider('Slowest speed', as.minRate, MC_SETTINGS.ASSIST_RANGES.minRate, 0.05, (v) => v.toFixed(2) + 'x', (v) => handlers.onAssist({ minRate: v }));
       const ex = document.createElement('label');
       ex.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
       const exc = document.createElement('input');
@@ -2230,8 +2202,6 @@ var MC_PICKER = (() => {
   const assist = MC_ASSIST.create({
     pause: () => { U.safe(() => bridge.call('pause')); },
     play: resumePlayback,
-    setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
-    getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
     sample: () => assistFrame(),
     indicate: (st) => { overlay.setIndicator(st); if (st.holding) setHoldingUi(true); else if (holdingUi) startResumeGrace(); },
   }, (msg) => mark('assist', msg));
@@ -2528,7 +2498,7 @@ var MC_PICKER = (() => {
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
-    else if (e.code === 'KeyP') { const a = MC_SETTINGS.get().assist; MC_SETTINGS.save({ assist: { mode: a.mode === 'off' ? a.lastMode : 'off' } }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { mode: MC_SETTINGS.get().assist.mode === 'off' ? 'pause' : 'off' } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   function sessionSummary() {
