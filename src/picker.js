@@ -114,6 +114,27 @@ var MC_PICKER = (() => {
       updatePillVisibility();
     }
 
+    /**
+     * A two-or-more-state segmented control.
+     * @param {Array<[string, string]>} options [value, label]
+     * @param {string} value the selected value
+     * @param {(value: string) => void} onChange
+     */
+    function segmented(options, value, onChange) {
+      const box = document.createElement('div');
+      box.style.cssText = 'display:inline-flex;border:1px solid rgba(255,255,255,.28);border-radius:999px;overflow:hidden;';
+      for (const [v, label] of options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        const on = v === value;
+        b.style.cssText = 'border:none;padding:4px 12px;font:inherit;font-size:13px;cursor:pointer;line-height:1.2;' + (on ? 'background:#e50914;color:#fff;' : 'background:transparent;color:rgba(255,255,255,.75);');
+        b.addEventListener('click', () => { if (v !== value) onChange(v); });
+        box.appendChild(b);
+      }
+      return box;
+    }
+
     /** @param {string} text @param {string} css */
     function el(text, css) {
       const d = document.createElement('div');
@@ -187,13 +208,10 @@ var MC_PICKER = (() => {
       py.appendChild(pyc);
       py.appendChild(el('Pinyin on the Simplified Chinese line', 'flex:1;'));
       panel.appendChild(py);
-      const ru = document.createElement('label');
-      ru.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 0 2px 24px;cursor:pointer;';
-      const ruc = document.createElement('input');
-      ruc.type = 'checkbox'; ruc.checked = st.rubyUnder; ruc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      ruc.addEventListener('change', () => handlers.onStyle({ rubyUnder: ruc.checked }));
-      ru.appendChild(ruc);
-      ru.appendChild(el('Pinyin below the characters', 'flex:1;color:rgba(255,255,255,.85);'));
+      const ru = document.createElement('div');
+      ru.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0 2px;' + (state.pinyin ? '' : 'opacity:.45;');
+      ru.appendChild(el('Pinyin position', 'flex:1;'));
+      ru.appendChild(segmented([['above', 'Above'], ['below', 'Below']], st.rubyUnder ? 'below' : 'above', (v) => handlers.onStyle({ rubyUnder: v === 'below' })));
       panel.appendChild(ru);
 
       const bd = document.createElement('label');
