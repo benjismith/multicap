@@ -40,7 +40,7 @@ without building. Edit `src/`, never `dist/`.
 ## Install
 
 1. `npm install && npm run build` (once; `dist/` is also committed).
-2. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick this folder. After any edit: `npm run build`, then the reload icon on the multicap card.
+2. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick this folder. After any edit: `npm run build`, then the reload icon on the multicap card, **then reload the Netflix tab**: an extension reload does not re-inject content scripts into tabs that are already open, so the old code keeps running there until the page reloads.
 3. Open DevTools on a Netflix tab **before** starting playback (the hooks run at
    `document_start`, but the console only keeps what it saw while open). Turn on
    **Preserve log** in the console settings.
