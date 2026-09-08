@@ -4,11 +4,13 @@ Dual-language (English + Chinese) subtitles on Netflix, for one person, loaded
 unpacked. Built to survive an **ad-supported plan** with server-side-stitched
 ads, which shift `video.currentTime` away from subtitle time.
 
-**Status: Phase 1 — single-track overlay, ad-correct.** The English track is
-rendered over the video from the player's own content clock, blanked during
-ads, and rebuilt on every episode change. Verified live on the ads plan
-2026-09-07 (see `docs/phase0-findings.md`, "Phase 1 verification"). Next:
-Phase 2, the second (Chinese) line and a track picker.
+**Status: Phase 2 — dual lines with an in-player picker.** English over Chinese
+by default, rendered from the player's own content clock, blanked during ads,
+rebuilt on every episode change, with a picker (pill in the top-right while the
+controls show, or `Ctrl+Shift+M`) that persists the two slots across titles.
+`Ctrl+Shift+H` hides/shows the overlay. Verified live on the ads plan 2026-09-07
+(see `docs/phase0-findings.md`). Next: Phase 3 hardening (native-cue calibration
+as the fallback clock) and Phase 4 styling controls.
 
 ## Layout
 
@@ -23,7 +25,9 @@ Phase 2, the second (Chinese) line and a track picker.
 | `src/subtitles.js` | isolated | WebVTT parser for Netflix's files, cursor-based active-cue lookup, text normalization for cue matching. |
 | `src/clock.js` | isolated | Content time + in-ad flag from the player (via the bridge), `video.currentTime` as a warned fallback. |
 | `src/overlay.js` | isolated | The subtitle layer: mounted next to `<video>`, CSSOM-styled, sized from the picture box. |
-| `src/content.js` | isolated | Session per manifest (pick track → fetch → parse → render on rAF), plus the Phase 0 instrumentation: `<video>` events, `data-uia` diffs, ad text, native cues, URL changes. |
+| `src/settings.js` | isolated | Two language slots + enabled flag in `chrome.storage.local`. |
+| `src/picker.js` | isolated | The pill and the track panel, mounted inside the player view (survives fullscreen). |
+| `src/content.js` | isolated | Session per manifest (resolve slots → fetch → parse → render on rAF), picker wiring, shortcuts, plus the Phase 0 instrumentation: `<video>` events, `data-uia` diffs, ad text, native cues, URL changes. |
 
 Chrome injects a file listed in two `content_scripts` entries only once per
 frame (de-duplicated by path, ignoring the world), so shared files cannot be

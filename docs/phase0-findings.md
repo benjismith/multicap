@@ -160,3 +160,18 @@ Single English track rendered from `getSegmentTime()`; native layer kept at
 - One Netflix load stalled on the spinner for ~45 s with no console errors from
   either world and no manifest; a page reload fixed it. Not attributed to the
   extension (nothing new runs before a manifest exists), but worth watching.
+
+## Phase 2 verification (2026-09-07, same session)
+
+- Both slots render: English (725 cues) over Simplified Chinese (702 cues),
+  the Chinese line 15% larger. Switching the bottom slot to Traditional in the
+  panel restarted the session with 781 cues within ~2 s; parsed cues are cached
+  per title + track so switching back is instant.
+- Picker pill and panel mount inside `.watch-video--player-view`; Netflix
+  fullscreens `.watch-video`, which contains overlay, pill, and panel, and the
+  overlay rescaled with the larger box.
+- `Ctrl+Shift+H` hid the overlay (pill shows "(off)") and showed it again;
+  `Ctrl+Shift+M` opened the panel. Keys pressed while the panel has focus stay
+  in the panel (Netflix's F shortcut did nothing until the panel was closed).
+- The stored slots survived a page reload.
+- The lines rise above Netflix's control bar while it is showing.
