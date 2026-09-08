@@ -924,7 +924,13 @@ var MC_CLOCK = (() => {
       if (inAd) return;
       const estimate = offsetKnown ? media + offset : null;
       const hint = estimate ?? playerT;
-      const m = matcher(text, hint);
+      let m = matcher(text, hint);
+      if (!m && hint != null) {
+        // Nothing near the estimate: the offset may have stepped further than the window
+        // (a long ad break, a seek through an ad). Accept a globally unique text as a candidate.
+        m = matcher(text, null);
+        if (m && m.ambiguous) m = null;
+      }
       if (!m) { unmatched++; return; }
       if (m.ambiguous && hint == null) return; // wait for a cue whose text is unique
       const o = m.begin - media;
