@@ -209,3 +209,21 @@ mid-roll ahead.
   `!important`, with the inline opacity re-checked every tick as a fallback.
 - Cue-boundary note: at a pause right at a cue's end, Netflix may still show
   the cue while we have already cleared it (sub-100 ms edge; not a bug).
+
+## Later findings (2026-09-08)
+
+- **Stacking:** `video-canvas` and the player view carry `will-change: opacity`,
+  so each is a stacking context. Anything mounted inside the video's box can
+  never rise above Netflix's pause card (`[data-uia="pause-ad"]`, a full-size
+  child of the player view with `z-index: 1` while shown). The overlay
+  therefore mounts in the player view itself, after the card in document
+  order, at `z-index: 5`; the picker pill/panel stay at 20/21.
+- The pause card does not paint while the cursor keeps the controls visible;
+  its elements are in the DOM regardless.
+- **Pinyin:** `Intl.Segmenter` + the corpus dictionary annotate a line in well
+  under a millisecond; the 1.5 MB dictionary loads once per page. Character
+  fallback readings are ordered by corpus frequency with standalone particles
+  pinned (地/得/的 de, 了 le, 着 zhe, 为 wèi), because sense rank orders
+  meanings, not readings (好's rank-1 sense is hào).
+- **Pause behaviour:** the last caption stays up while paused if it ended
+  within 4 s of the pause point; seeks and new video elements clear it.
