@@ -1444,6 +1444,12 @@ var MC_ASSIST = (() => {
     let cap = null;
     let expectingPause = false;
     const stats = { captions: 0, slowed: 0, paused: 0, resumed: 0, cancelled: 0 };
+    /** Last decisions, for diagnosing "it didn't pause" reports. */
+    const trace = MC_UTIL.ring(40);
+    /** @type {{t: number, paused: boolean} | null} last frame seen for the current caption */
+    let lastFrame = null;
+    /** @param {string} ev @param {Record<string, any>} [x] */
+    const tr = (ev, x = {}) => trace.push({ ev, at: +(performance.now() / 1000).toFixed(1), ...x });
 
     /** @param {Partial<Config>} c */
     function configure(c) {
@@ -1454,9 +1460,11 @@ var MC_ASSIST = (() => {
     /** Drop the current caption's plan: restore the rate, cancel a pending resume. Never resumes a pause. */
     function reset() {
       if (!cap) return;
+      if (!cap.acted) tr('drop-unacted', { key: cap.key.slice(0, 12), end: cap.end, lastT: lastFrame && lastFrame.t, lastPaused: lastFrame && lastFrame.paused });
       if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* player gone */ } }
       if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
       cap = null;
+      lastFrame = null;
     }
 
     /**
@@ -1476,6 +1484,7 @@ var MC_ASSIST = (() => {
         const chars = (f.zh.match(HAN_RE) || []).length;
         cap = { key, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, baseRate: 1, slowed: null, pausedByUs: false, acted: false, resumeHandle: 0 };
         stats.captions++;
+        tr('new', { key: key.slice(0, 12), t: +f.t.toFixed(3), end: +f.end.toFixed(3), chars, paused: f.paused });
         if (cfg.mode !== 'pause' && !f.paused) {
           const natural = f.end - f.t; // content seconds left ≈ wall seconds at the base rate
           if (natural > 0.05 && natural < cap.required) {
@@ -1491,10 +1500,12 @@ var MC_ASSIST = (() => {
         }
         return;
       }
+      lastFrame = { t: +f.t.toFixed(3), paused: f.paused };
       if (cap.acted || f.paused) return;
       if (f.t < cap.end - EPS) return;
       // The caption is about to vanish.
       cap.acted = true;
+      tr('act', { t: +f.t.toFixed(3), elapsed: +((f.wall - cap.startWall) / 1000).toFixed(2), required: cap.required });
       if (cap.slowed != null) { actions.setRate(cap.baseRate); cap.slowed = null; }
       const elapsed = (f.wall - cap.startWall) / 1000;
       const needed = cap.required - elapsed;
@@ -1513,13 +1524,15 @@ var MC_ASSIST = (() => {
       cap.pausedByUs = false;
       cap.resumeHandle = 0;
       stats.resumed++;
+      tr('resume', { why });
       log(`assist: resumed (${why})`);
       actions.play();
     }
 
     /** video 'pause' event: ours, or the user's. */
     function onVideoPause() {
-      if (expectingPause) { expectingPause = false; return; }
+      if (expectingPause) { expectingPause = false; tr('pause-ours'); return; }
+      tr('pause-manual', { cap: cap ? cap.key.slice(0, 12) : null, pausedByUs: cap ? cap.pausedByUs : null });
       if (cap) { // manual pause: leave it alone, and don't act again on this caption
         if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* ignore */ } cap.slowed = null; }
         if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
@@ -1531,6 +1544,7 @@ var MC_ASSIST = (() => {
 
     /** video 'play' event: the user (or we) resumed. */
     function onVideoPlay() {
+      tr('play', { cap: cap ? cap.key.slice(0, 12) : null, pausedByUs: cap ? cap.pausedByUs : null });
       if (cap && cap.pausedByUs) {
         if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
         cap.pausedByUs = false;
@@ -1540,7 +1554,7 @@ var MC_ASSIST = (() => {
     }
 
     function status() {
-      return { mode: cfg.mode, secondsPerChar: cfg.secondsPerChar, minRate: cfg.minRate, autoResume: cfg.autoResume, stats, current: cap ? { chars: cap.chars, required: +cap.required.toFixed(2), slowed: cap.slowed, pausedByUs: cap.pausedByUs, acted: cap.acted } : null };
+      return { mode: cfg.mode, secondsPerChar: cfg.secondsPerChar, minRate: cfg.minRate, autoResume: cfg.autoResume, stats, current: cap ? { chars: cap.chars, required: +cap.required.toFixed(2), slowed: cap.slowed, pausedByUs: cap.pausedByUs, acted: cap.acted } : null, trace: trace.items() };
     }
 
     return { configure, update, reset, resume, onVideoPause, onVideoPlay, status, get holding() { return !!(cap && cap.pausedByUs); } };
