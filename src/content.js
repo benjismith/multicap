@@ -275,8 +275,31 @@
     setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
     getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
     sample: () => assistFrame(),
-    indicate: (st) => overlay.setIndicator(st),
+    indicate: (st) => { overlay.setIndicator(st); setHoldingUi(!!st.holding); },
   }, (msg) => mark('assist', msg));
+
+  /**
+   * While the assist holds a caption, Netflix's control bar (which it shows on every pause)
+   * is hidden and the captions are not raised, so nothing on screen moves. Manual pauses keep
+   * Netflix's normal behaviour.
+   */
+  /** @type {CSSStyleSheet | null} */
+  let controlsSheet = null;
+  let holdingUi = false;
+  /** @param {boolean} on */
+  function setHoldingUi(on) {
+    if (on === holdingUi) return;
+    holdingUi = on;
+    try {
+      if (!controlsSheet) {
+        controlsSheet = new CSSStyleSheet();
+        controlsSheet.replaceSync(`${N.SEL.controls} { visibility: hidden !important; }`);
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, controlsSheet];
+      }
+      controlsSheet.disabled = !on;
+    } catch { /* no constructed stylesheets: the bar shows, captions still stay put */ }
+    pickerTick();
+  }
 
   /**
    * A fresh frame for the reading assist: content time, the Chinese caption on screen and
@@ -520,7 +543,7 @@
     const view = onWatch ? /** @type {HTMLElement | null} */ (document.querySelector(N.SEL.playerView)) : null;
     if (view) picker.mount(view);
     else if (picker.mounted) picker.unmount();
-    const cv = !!document.querySelector(N.SEL.controls);
+    const cv = !!document.querySelector(N.SEL.controls) && !holdingUi;
     if (cv !== controlsVisible) {
       controlsVisible = cv;
       picker.setControlsVisible(cv);

@@ -1044,7 +1044,7 @@ var MC_CLOCK = (() => {
 var MC_OVERLAY = (() => {
   const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
   // z-index 5: above Netflix's pause card (z-index 1, same parent), below the picker pill/panel (20/21).
-  const ROOT_CSS = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 5% 7%;box-sizing:border-box;z-index:5;';
+  const ROOT_CSS = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 5% 7%;box-sizing:border-box;z-index:5;transition:padding-bottom .25s ease;';
   const LINE_CSS = 'color:#fff;text-align:center;white-space:pre-line;line-height:1.3;max-width:90%;margin:0.1em 0;padding:0.05em 0.4em;font-weight:500;font-family:' + FONT + ';text-shadow:0 0 6px rgba(0,0,0,.9),0 0 2px #000,1px 1px 2px #000;';
   /** Base font size as a fraction of the picture box height, before the user's scale. */
   const BASE_SIZE_RATIO = 0.042;
@@ -2233,8 +2233,31 @@ var MC_PICKER = (() => {
     setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
     getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
     sample: () => assistFrame(),
-    indicate: (st) => overlay.setIndicator(st),
+    indicate: (st) => { overlay.setIndicator(st); setHoldingUi(!!st.holding); },
   }, (msg) => mark('assist', msg));
+
+  /**
+   * While the assist holds a caption, Netflix's control bar (which it shows on every pause)
+   * is hidden and the captions are not raised, so nothing on screen moves. Manual pauses keep
+   * Netflix's normal behaviour.
+   */
+  /** @type {CSSStyleSheet | null} */
+  let controlsSheet = null;
+  let holdingUi = false;
+  /** @param {boolean} on */
+  function setHoldingUi(on) {
+    if (on === holdingUi) return;
+    holdingUi = on;
+    try {
+      if (!controlsSheet) {
+        controlsSheet = new CSSStyleSheet();
+        controlsSheet.replaceSync(`${N.SEL.controls} { visibility: hidden !important; }`);
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, controlsSheet];
+      }
+      controlsSheet.disabled = !on;
+    } catch { /* no constructed stylesheets: the bar shows, captions still stay put */ }
+    pickerTick();
+  }
 
   /**
    * A fresh frame for the reading assist: content time, the Chinese caption on screen and
@@ -2478,7 +2501,7 @@ var MC_PICKER = (() => {
     const view = onWatch ? /** @type {HTMLElement | null} */ (document.querySelector(N.SEL.playerView)) : null;
     if (view) picker.mount(view);
     else if (picker.mounted) picker.unmount();
-    const cv = !!document.querySelector(N.SEL.controls);
+    const cv = !!document.querySelector(N.SEL.controls) && !holdingUi;
     if (cv !== controlsVisible) {
       controlsVisible = cv;
       picker.setControlsVisible(cv);
