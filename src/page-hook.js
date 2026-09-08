@@ -438,7 +438,7 @@
     settings: () => bridge.call('settings-get'),
     /** @param {Array<string | null>} langs e.g. ['en', 'zh-Hant'] */
     setLangs: (langs) => bridge.call('settings-set', { langs }),
-    /** @param {{scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}} style */
+    /** @param {{scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}} style */
     setStyle: (style) => bridge.call('settings-set', { style }),
     /** @param {string} text */
     pinyin: (text) => bridge.call('pinyin', text),

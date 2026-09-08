@@ -15,7 +15,7 @@ var MC_OVERLAY = (() => {
   const BASE_SIZE_RATIO = 0.042;
   const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
   const WORD_CSS = 'display:inline-block;margin:0 0.12em;white-space:nowrap;';
-  const RUBY_CSS = 'ruby-position:over;ruby-align:center;';
+  const RUBY_CSS = 'ruby-align:center;';
   const RT_CSS = 'font-size:0.42em;line-height:1.1;font-weight:400;letter-spacing:0;color:rgba(255,255,255,.9);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:0 0 4px rgba(0,0,0,.9),0 0 2px #000;';
 
   function create() {
@@ -31,8 +31,8 @@ var MC_OVERLAY = (() => {
     let lastTexts = [];
     let lastVisible = true;
     let raised = false;
-    /** @type {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} */
-    let style = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
+    /** @type {{scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}} */
+    let style = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
 
     function fit() {
       if (!root || !host) return;
@@ -50,10 +50,11 @@ var MC_OVERLAY = (() => {
       });
     }
 
-    /** @param {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} st */
+    /** @param {{scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}} st */
     function setStyle(st) {
       style = { ...style, ...st };
       applyStyle();
+      lastTexts = []; // ruby position lives in the line DOM, so the next render refills
     }
 
     /**
@@ -115,7 +116,7 @@ var MC_OVERLAY = (() => {
         w.style.cssText = WORD_CSS;
         [...s.text].forEach((c, i) => {
           const ruby = document.createElement('ruby');
-          ruby.style.cssText = RUBY_CSS;
+          ruby.style.cssText = RUBY_CSS + 'ruby-position:' + (style.rubyUnder ? 'under' : 'over') + ';';
           ruby.appendChild(document.createTextNode(c));
           const rt = document.createElement('rt');
           rt.style.cssText = RT_CSS;

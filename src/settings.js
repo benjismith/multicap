@@ -8,14 +8,15 @@
  */
 var MC_SETTINGS = (() => {
   /**
-   * @typedef {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} Style
+   * @typedef {{scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}} Style
    * scale: overall font size multiplier; bottom: distance from the picture's bottom edge in %;
-   * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
+   * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line;
+   * rubyUnder: pinyin below the characters (true) or above them (false).
    */
   /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
-  const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
+  const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
   /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
@@ -50,6 +51,7 @@ var MC_SETTINGS = (() => {
     st.bottom = clamp(st.bottom, RANGES.bottom, DEFAULT_STYLE.bottom);
     st.slotScale = [0, 1].map((i) => clamp(Array.isArray(st.slotScale) ? st.slotScale[i] : undefined, RANGES.slotScale, DEFAULT_STYLE.slotScale[i]));
     st.backdrop = st.backdrop === true;
+    st.rubyUnder = st.rubyUnder !== false;
     s.style = st;
     return s;
   }

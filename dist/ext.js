@@ -997,7 +997,7 @@ var MC_OVERLAY = (() => {
   const BASE_SIZE_RATIO = 0.042;
   const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
   const WORD_CSS = 'display:inline-block;margin:0 0.12em;white-space:nowrap;';
-  const RUBY_CSS = 'ruby-position:over;ruby-align:center;';
+  const RUBY_CSS = 'ruby-align:center;';
   const RT_CSS = 'font-size:0.42em;line-height:1.1;font-weight:400;letter-spacing:0;color:rgba(255,255,255,.9);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:0 0 4px rgba(0,0,0,.9),0 0 2px #000;';
 
   function create() {
@@ -1013,8 +1013,8 @@ var MC_OVERLAY = (() => {
     let lastTexts = [];
     let lastVisible = true;
     let raised = false;
-    /** @type {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} */
-    let style = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
+    /** @type {{scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}} */
+    let style = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
 
     function fit() {
       if (!root || !host) return;
@@ -1032,10 +1032,11 @@ var MC_OVERLAY = (() => {
       });
     }
 
-    /** @param {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} st */
+    /** @param {{scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}} st */
     function setStyle(st) {
       style = { ...style, ...st };
       applyStyle();
+      lastTexts = []; // ruby position lives in the line DOM, so the next render refills
     }
 
     /**
@@ -1097,7 +1098,7 @@ var MC_OVERLAY = (() => {
         w.style.cssText = WORD_CSS;
         [...s.text].forEach((c, i) => {
           const ruby = document.createElement('ruby');
-          ruby.style.cssText = RUBY_CSS;
+          ruby.style.cssText = RUBY_CSS + 'ruby-position:' + (style.rubyUnder ? 'under' : 'over') + ';';
           ruby.appendChild(document.createTextNode(c));
           const rt = document.createElement('rt');
           rt.style.cssText = RT_CSS;
@@ -1146,14 +1147,15 @@ var MC_OVERLAY = (() => {
  */
 var MC_SETTINGS = (() => {
   /**
-   * @typedef {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} Style
+   * @typedef {{scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}} Style
    * scale: overall font size multiplier; bottom: distance from the picture's bottom edge in %;
-   * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
+   * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line;
+   * rubyUnder: pinyin below the characters (true) or above them (false).
    */
   /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
-  const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
+  const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
   /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
@@ -1188,6 +1190,7 @@ var MC_SETTINGS = (() => {
     st.bottom = clamp(st.bottom, RANGES.bottom, DEFAULT_STYLE.bottom);
     st.slotScale = [0, 1].map((i) => clamp(Array.isArray(st.slotScale) ? st.slotScale[i] : undefined, RANGES.slotScale, DEFAULT_STYLE.slotScale[i]));
     st.backdrop = st.backdrop === true;
+    st.rubyUnder = st.rubyUnder !== false;
     s.style = st;
     return s;
   }
@@ -1369,7 +1372,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1382,8 +1385,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}}} */
-    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false } };
+    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}}} */
+    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1560,8 +1563,16 @@ var MC_PICKER = (() => {
       pyc.type = 'checkbox'; pyc.checked = state.pinyin; pyc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
       pyc.addEventListener('change', () => handlers.onPinyin(pyc.checked));
       py.appendChild(pyc);
-      py.appendChild(el('Pinyin over Simplified Chinese', 'flex:1;'));
+      py.appendChild(el('Pinyin on the Simplified Chinese line', 'flex:1;'));
       panel.appendChild(py);
+      const ru = document.createElement('label');
+      ru.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 0 2px 24px;cursor:pointer;';
+      const ruc = document.createElement('input');
+      ruc.type = 'checkbox'; ruc.checked = st.rubyUnder; ruc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      ruc.addEventListener('change', () => handlers.onStyle({ rubyUnder: ruc.checked }));
+      ru.appendChild(ruc);
+      ru.appendChild(el('Pinyin below the characters', 'flex:1;color:rgba(255,255,255,.85);'));
+      panel.appendChild(ru);
 
       const bd = document.createElement('label');
       bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
