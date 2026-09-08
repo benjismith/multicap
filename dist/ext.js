@@ -1249,16 +1249,17 @@ var MC_OVERLAY = (() => {
  */
 var MC_SETTINGS = (() => {
   /**
-   * @typedef {{scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}} Style
+   * @typedef {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} Style
    * scale: overall font size multiplier; bottom: distance from the picture's bottom edge in %;
-   * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line;
-   * rubyUnder: pinyin below the characters (true) or above them (false).
+   * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
    */
+  /** @typedef {'none' | 'above' | 'below'} Pinyin */
   /** @typedef {{mode: 'off' | 'pause', secondsPerChar: number, autoResume: boolean, extend: boolean}} Assist */
-  /** @typedef {{enabled: boolean, pinyin: boolean, style: Style, assist: Assist}} Settings */
+  /** @typedef {{enabled: boolean, pinyin: Pinyin, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
-  const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true };
+  const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
+  const PINYIN_MODES = ['none', 'above', 'below'];
   /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
@@ -1266,7 +1267,7 @@ var MC_SETTINGS = (() => {
   const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true };
   const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
   const ASSIST_MODES = ['off', 'pause'];
-  const DEFAULTS = { enabled: true, pinyin: true, style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
+  const DEFAULTS = { enabled: true, pinyin: 'below', style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -1289,14 +1290,16 @@ var MC_SETTINGS = (() => {
     const s = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
     delete s.langs; // language slots existed in earlier builds
     s.enabled = s.enabled !== false;
-    s.pinyin = s.pinyin !== false;
     const st = { ...DEFAULT_STYLE, ...(s.style && typeof s.style === 'object' ? s.style : {}) };
+    // pinyin was a boolean plus style.rubyUnder in earlier builds
+    if (typeof s.pinyin === 'boolean') s.pinyin = s.pinyin ? (st.rubyUnder === false ? 'above' : 'below') : 'none';
+    if (!PINYIN_MODES.includes(s.pinyin)) s.pinyin = DEFAULTS.pinyin;
+    delete st.rubyUnder;
     const clamp = (/** @type {any} */ v, /** @type {number[]} */ r, /** @type {number} */ d) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(r[1], Math.max(r[0], v)) : d);
     st.scale = clamp(st.scale, RANGES.scale, DEFAULT_STYLE.scale);
     st.bottom = clamp(st.bottom, RANGES.bottom, DEFAULT_STYLE.bottom);
     st.slotScale = [0, 1].map((i) => clamp(Array.isArray(st.slotScale) ? st.slotScale[i] : undefined, RANGES.slotScale, DEFAULT_STYLE.slotScale[i]));
     st.backdrop = st.backdrop === true;
-    st.rubyUnder = st.rubyUnder !== false;
     s.style = st;
     const a = { ...DEFAULT_ASSIST, ...(s.assist && typeof s.assist === 'object' ? s.assist : {}) };
     a.mode = a.mode === 'slow' || a.mode === 'slowpause' ? 'pause' : ASSIST_MODES.includes(a.mode) ? a.mode : 'off'; // slow modes were removed
@@ -1309,7 +1312,7 @@ var MC_SETTINGS = (() => {
     return s;
   }
 
-  /** @param {{enabled?: boolean, pinyin?: boolean, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
+  /** @param {{enabled?: boolean, pinyin?: Pinyin, style?: Partial<Style>, assist?: Partial<Assist>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
     cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) }, assist: { ...cur.assist, ...(patch.assist || {}) } });
@@ -1324,7 +1327,7 @@ var MC_SETTINGS = (() => {
   /** @param {(s: Settings) => void} fn */
   function onChange(fn) { listeners.push(fn); }
 
-  return { DEFAULTS, DEFAULT_STYLE, RANGES, DEFAULT_ASSIST, ASSIST_RANGES, ASSIST_MODES, load, save, get, onChange, normalize };
+  return { DEFAULTS, DEFAULT_STYLE, RANGES, PINYIN_MODES, DEFAULT_ASSIST, ASSIST_RANGES, ASSIST_MODES, load, save, get, onChange, normalize };
 })();
 
 // ===== src/pinyin.js =====
@@ -1662,7 +1665,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
+   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1677,9 +1680,9 @@ var MC_PICKER = (() => {
      * `resolved`: the language actually used for each line on the current title
      * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing;
      * it only feeds the pill.
-     * @type {{enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}}
+     * @type {{enabled: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}}
      */
-    let state = { enabled: true, pinyin: true, resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
+    let state = { enabled: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1709,7 +1712,7 @@ var MC_PICKER = (() => {
       pill = null; panelEl = null; host = null; open = false;
     }
 
-    /** @param {{enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any, assist?: any}} st */
+    /** @param {{enabled?: boolean, pinyin?: string, resolved?: Array<string | null>, style?: any, assist?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -1822,19 +1825,11 @@ var MC_PICKER = (() => {
       slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
       slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
       slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
-      const py = document.createElement('label');
-      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
-      const pyc = document.createElement('input');
-      pyc.type = 'checkbox'; pyc.checked = state.pinyin; pyc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      pyc.addEventListener('change', () => handlers.onPinyin(pyc.checked));
-      py.appendChild(pyc);
-      py.appendChild(el('Pinyin on the Simplified Chinese line', 'flex:1;'));
+      const py = document.createElement('div');
+      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;';
+      py.appendChild(el('Pinyin', 'flex:1;'));
+      py.appendChild(segmented([['none', 'None'], ['above', 'Above'], ['below', 'Below']], state.pinyin, (v) => handlers.onPinyin(v)));
       panel.appendChild(py);
-      const ru = document.createElement('div');
-      ru.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0 2px;' + (state.pinyin ? '' : 'opacity:.45;');
-      ru.appendChild(el('Pinyin position', 'flex:1;'));
-      ru.appendChild(segmented([['above', 'Above'], ['below', 'Below']], st.rubyUnder ? 'below' : 'above', (v) => handlers.onStyle({ rubyUnder: v === 'below' })));
-      panel.appendChild(ru);
 
       const bd = document.createElement('label');
       bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
@@ -2239,14 +2234,16 @@ var MC_PICKER = (() => {
   }
   const picker = MC_PICKER.create({
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
-    onPinyin(pinyin) { MC_SETTINGS.save({ pinyin }); },
+    onPinyin(pinyin) { MC_SETTINGS.save({ pinyin: /** @type {any} */ (pinyin) }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
     onAssist(patch) { MC_SETTINGS.save({ assist: /** @type {any} */ (patch) }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(st.style); assist.configure(st.assist); return st; });
+  /** The overlay's style, with the pinyin position folded in. @param {ReturnType<typeof MC_SETTINGS.get>} st */
+  const overlayStyle = (st) => ({ ...st.style, rubyUnder: st.pinyin === 'below' });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(st.assist); return st; });
   MC_SETTINGS.onChange((st) => {
     picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
-    overlay.setStyle(st.style);
+    overlay.setStyle(overlayStyle(st));
     assist.configure(st.assist);
     if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
@@ -2356,7 +2353,7 @@ var MC_PICKER = (() => {
   let pinyinWarned = false;
   /** @param {Session} s */
   function ensurePinyin(s) {
-    if (!MC_SETTINGS.get().pinyin || MC_PINYIN.isReady() || !s.lines.some((l) => l && l.hans)) return;
+    if (MC_SETTINGS.get().pinyin === 'none' || MC_PINYIN.isReady() || !s.lines.some((l) => l && l.hans)) return;
     MC_PINYIN.load(PINYIN_URL).then(() => {
       const sz = MC_PINYIN.size;
       mark('pinyin:ready', `dictionary loaded: ${sz ? `${sz.words} words, ${sz.chars} chars` : '?'}`);
@@ -2404,7 +2401,7 @@ var MC_PICKER = (() => {
       else if (video.paused && s.lastShown && c.t >= s.lastShown.end - 0.5 && c.t - s.lastShown.end <= STICKY_S) texts = s.lastShown.texts; // reading time while paused
     }
     assist.update({ t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh: zhText, end: zhEnd });
-    const pinyin = MC_SETTINGS.get().pinyin && MC_PINYIN.isReady();
+    const pinyin = MC_SETTINGS.get().pinyin !== 'none' && MC_PINYIN.isReady();
     const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
@@ -2531,10 +2528,10 @@ var MC_PICKER = (() => {
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{enabled?: boolean, pinyin?: boolean, style?: any, assist?: any}} */
+    /** @type {{enabled?: boolean, pinyin?: any, style?: any, assist?: any}} */
     const clean = {};
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-    if (typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
+    if (typeof patch.pinyin === 'string' || typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     if (patch.assist && typeof patch.assist === 'object') clean.assist = patch.assist;
     MC_SETTINGS.save(clean);

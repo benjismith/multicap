@@ -339,14 +339,16 @@
   }
   const picker = MC_PICKER.create({
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
-    onPinyin(pinyin) { MC_SETTINGS.save({ pinyin }); },
+    onPinyin(pinyin) { MC_SETTINGS.save({ pinyin: /** @type {any} */ (pinyin) }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
     onAssist(patch) { MC_SETTINGS.save({ assist: /** @type {any} */ (patch) }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(st.style); assist.configure(st.assist); return st; });
+  /** The overlay's style, with the pinyin position folded in. @param {ReturnType<typeof MC_SETTINGS.get>} st */
+  const overlayStyle = (st) => ({ ...st.style, rubyUnder: st.pinyin === 'below' });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(st.assist); return st; });
   MC_SETTINGS.onChange((st) => {
     picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
-    overlay.setStyle(st.style);
+    overlay.setStyle(overlayStyle(st));
     assist.configure(st.assist);
     if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
@@ -456,7 +458,7 @@
   let pinyinWarned = false;
   /** @param {Session} s */
   function ensurePinyin(s) {
-    if (!MC_SETTINGS.get().pinyin || MC_PINYIN.isReady() || !s.lines.some((l) => l && l.hans)) return;
+    if (MC_SETTINGS.get().pinyin === 'none' || MC_PINYIN.isReady() || !s.lines.some((l) => l && l.hans)) return;
     MC_PINYIN.load(PINYIN_URL).then(() => {
       const sz = MC_PINYIN.size;
       mark('pinyin:ready', `dictionary loaded: ${sz ? `${sz.words} words, ${sz.chars} chars` : '?'}`);
@@ -504,7 +506,7 @@
       else if (video.paused && s.lastShown && c.t >= s.lastShown.end - 0.5 && c.t - s.lastShown.end <= STICKY_S) texts = s.lastShown.texts; // reading time while paused
     }
     assist.update({ t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh: zhText, end: zhEnd });
-    const pinyin = MC_SETTINGS.get().pinyin && MC_PINYIN.isReady();
+    const pinyin = MC_SETTINGS.get().pinyin !== 'none' && MC_PINYIN.isReady();
     const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
@@ -631,10 +633,10 @@
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{enabled?: boolean, pinyin?: boolean, style?: any, assist?: any}} */
+    /** @type {{enabled?: boolean, pinyin?: any, style?: any, assist?: any}} */
     const clean = {};
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-    if (typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
+    if (typeof patch.pinyin === 'string' || typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     if (patch.assist && typeof patch.assist === 'object') clean.assist = patch.assist;
     MC_SETTINGS.save(clean);

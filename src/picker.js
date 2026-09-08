@@ -28,7 +28,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
+   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -43,9 +43,9 @@ var MC_PICKER = (() => {
      * `resolved`: the language actually used for each line on the current title
      * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing;
      * it only feeds the pill.
-     * @type {{enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}}
+     * @type {{enabled: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}}
      */
-    let state = { enabled: true, pinyin: true, resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
+    let state = { enabled: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -75,7 +75,7 @@ var MC_PICKER = (() => {
       pill = null; panelEl = null; host = null; open = false;
     }
 
-    /** @param {{enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any, assist?: any}} st */
+    /** @param {{enabled?: boolean, pinyin?: string, resolved?: Array<string | null>, style?: any, assist?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -188,19 +188,11 @@ var MC_PICKER = (() => {
       slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
       slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
       slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
-      const py = document.createElement('label');
-      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
-      const pyc = document.createElement('input');
-      pyc.type = 'checkbox'; pyc.checked = state.pinyin; pyc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      pyc.addEventListener('change', () => handlers.onPinyin(pyc.checked));
-      py.appendChild(pyc);
-      py.appendChild(el('Pinyin on the Simplified Chinese line', 'flex:1;'));
+      const py = document.createElement('div');
+      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;';
+      py.appendChild(el('Pinyin', 'flex:1;'));
+      py.appendChild(segmented([['none', 'None'], ['above', 'Above'], ['below', 'Below']], state.pinyin, (v) => handlers.onPinyin(v)));
       panel.appendChild(py);
-      const ru = document.createElement('div');
-      ru.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0 2px;' + (state.pinyin ? '' : 'opacity:.45;');
-      ru.appendChild(el('Pinyin position', 'flex:1;'));
-      ru.appendChild(segmented([['above', 'Above'], ['below', 'Below']], st.rubyUnder ? 'below' : 'above', (v) => handlers.onStyle({ rubyUnder: v === 'below' })));
-      panel.appendChild(ru);
 
       const bd = document.createElement('label');
       bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';

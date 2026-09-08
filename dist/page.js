@@ -1094,6 +1094,7 @@ var MC_BRIDGE = (() => {
         '  __multicap.sync()       native-cue vs parsed-cue timing agreement (Layer C measurement)',
         '  __multicap.settings()   persisted preferences (presentation + reading assist; the language pair is fixed)',
         '  __multicap.setStyle({scale:1.2, bottom:10, slotScale:[1,1.2], backdrop:true})  overlay styling',
+        '  __multicap.setPinyin(\'none\'|\'above\'|\'below\')',
         '  __multicap.pinyin(\'你好世界\')  how a line would be annotated (needs the dictionary loaded)',
         '  __multicap.assist()     reading-assist state; __multicap.setAssist({mode:\'pause\', secondsPerChar:0.4})',
         '  keyboard: Ctrl+Shift+M track picker, Ctrl+Shift+H hide/show, Ctrl+Shift+P reading assist on/off',
@@ -1131,10 +1132,12 @@ var MC_BRIDGE = (() => {
     overlay: (opts) => bridge.call('overlay-set', opts),
     sync: () => bridge.call('sync'),
     settings: () => bridge.call('settings-get'),
-    /** @param {{scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean, rubyUnder?: boolean}} style */
+    /** @param {{scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}} style */
     setStyle: (style) => bridge.call('settings-set', { style }),
     /** @param {string} text */
     pinyin: (text) => bridge.call('pinyin', text),
+    /** @param {'none' | 'above' | 'below'} mode */
+    setPinyin: (mode) => bridge.call('settings-set', { pinyin: mode }),
     assist: () => bridge.call('assist'),
     /** @param {{mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}} assist */
     setAssist: (assist) => bridge.call('settings-set', { assist }),
