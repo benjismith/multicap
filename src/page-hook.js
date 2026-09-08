@@ -406,7 +406,7 @@
         '  __multicap.setStyle({scale:1.2, bottom:10, slotScale:[1,1.2], backdrop:true})  overlay styling',
         '  __multicap.setPinyin(\'none\'|\'above\'|\'below\')',
         '  __multicap.pinyin(\'你好世界\')  how a line would be annotated (needs the dictionary loaded)',
-        '  __multicap.assist()     reading-assist state; __multicap.setAssist({mode:\'pause\', secondsPerChar:0.4})',
+        '  __multicap.assist()     reading-assist state; __multicap.setAssist({pause:\'timed\', secondsPerChar:0.4, extend:true})',
         '  keyboard: Ctrl+Shift+M track picker, Ctrl+Shift+H hide/show, Ctrl+Shift+P reading assist on/off',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
@@ -449,7 +449,7 @@
     /** @param {'none' | 'above' | 'below'} mode */
     setPinyin: (mode) => bridge.call('settings-set', { pinyin: mode }),
     assist: () => bridge.call('assist'),
-    /** @param {{mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}} assist */
+    /** @param {{pause?: 'off' | 'timed' | 'manual', secondsPerChar?: number, extend?: boolean}} assist */
     setAssist: (assist) => bridge.call('settings-set', { assist }),
     manifests: manifestSummaries,
     requests: () => state.requests,

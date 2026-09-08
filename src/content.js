@@ -345,11 +345,16 @@
   });
   /** The overlay's style, with the pinyin position folded in. @param {ReturnType<typeof MC_SETTINGS.get>} st */
   const overlayStyle = (st) => ({ ...st.style, rubyUnder: st.pinyin === 'below' });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(st.assist); return st; });
+  /** The assist's config from the setting: pause off / timed (auto-resume) / manual. @param {ReturnType<typeof MC_SETTINGS.get>} st */
+  const assistConfig = (st) => ({ mode: /** @type {'off' | 'pause'} */ (st.assist.pause === 'off' ? 'off' : 'pause'), secondsPerChar: st.assist.secondsPerChar, autoResume: st.assist.pause === 'timed' });
+  /** What Ctrl+Shift+P switches back to. */
+  let lastPauseMode = 'timed';
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(assistConfig(st)); if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause; return st; });
   MC_SETTINGS.onChange((st) => {
     picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
     overlay.setStyle(overlayStyle(st));
-    assist.configure(st.assist);
+    assist.configure(assistConfig(st));
+    if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause;
     if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
     mark('settings', `enabled=${st.enabled} pinyin=${st.pinyin} style=${JSON.stringify(st.style)} assist=${JSON.stringify(st.assist)}`, { quiet: true });
@@ -563,7 +568,7 @@
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
-    else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { mode: MC_SETTINGS.get().assist.mode === 'off' ? 'pause' : 'off' } }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { pause: /** @type {any} */ (MC_SETTINGS.get().assist.pause === 'off' ? lastPauseMode : 'off') } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   function sessionSummary() {

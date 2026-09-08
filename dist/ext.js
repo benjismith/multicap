@@ -1254,7 +1254,11 @@ var MC_SETTINGS = (() => {
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
    */
   /** @typedef {'none' | 'above' | 'below'} Pinyin */
-  /** @typedef {{mode: 'off' | 'pause', secondsPerChar: number, autoResume: boolean, extend: boolean}} Assist */
+  /**
+   * @typedef {{pause: 'off' | 'timed' | 'manual', secondsPerChar: number, extend: boolean}} Assist
+   * pause: hold the caption before it vanishes and resume after the reading time (timed) or
+   * wait for the viewer (manual); extend: let captions linger into silence.
+   */
   /** @typedef {{enabled: boolean, pinyin: Pinyin, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
@@ -1264,9 +1268,9 @@ var MC_SETTINGS = (() => {
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
   /** @type {Assist} */
-  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true };
+  const DEFAULT_ASSIST = { pause: 'off', secondsPerChar: 0.4, extend: true };
   const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
-  const ASSIST_MODES = ['off', 'pause'];
+  const PAUSE_MODES = ['off', 'timed', 'manual'];
   const DEFAULTS = { enabled: true, pinyin: 'below', style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
@@ -1302,11 +1306,11 @@ var MC_SETTINGS = (() => {
     st.backdrop = st.backdrop === true;
     s.style = st;
     const a = { ...DEFAULT_ASSIST, ...(s.assist && typeof s.assist === 'object' ? s.assist : {}) };
-    a.mode = a.mode === 'slow' || a.mode === 'slowpause' ? 'pause' : ASSIST_MODES.includes(a.mode) ? a.mode : 'off'; // slow modes were removed
-    delete a.minRate;
-    delete a.lastMode;
+    // earlier builds stored mode ('off' | 'pause' | 'slow' | 'slowpause') + autoResume
+    if (typeof a.mode === 'string') { a.pause = a.mode === 'off' ? 'off' : a.autoResume === false ? 'manual' : 'timed'; }
+    if (!PAUSE_MODES.includes(a.pause)) a.pause = 'off';
+    delete a.mode; delete a.autoResume; delete a.minRate; delete a.lastMode;
     a.secondsPerChar = clamp(a.secondsPerChar, ASSIST_RANGES.secondsPerChar, DEFAULT_ASSIST.secondsPerChar);
-    a.autoResume = a.autoResume !== false;
     a.extend = a.extend !== false;
     s.assist = a;
     return s;
@@ -1327,7 +1331,7 @@ var MC_SETTINGS = (() => {
   /** @param {(s: Settings) => void} fn */
   function onChange(fn) { listeners.push(fn); }
 
-  return { DEFAULTS, DEFAULT_STYLE, RANGES, PINYIN_MODES, DEFAULT_ASSIST, ASSIST_RANGES, ASSIST_MODES, load, save, get, onChange, normalize };
+  return { DEFAULTS, DEFAULT_STYLE, RANGES, PINYIN_MODES, DEFAULT_ASSIST, ASSIST_RANGES, PAUSE_MODES, load, save, get, onChange, normalize };
 })();
 
 // ===== src/pinyin.js =====
@@ -1662,10 +1666,10 @@ var MC_PICKER = (() => {
   }
 
   const SLIDER_CSS = 'width:100%;margin:0;accent-color:#e50914;cursor:pointer;';
-  const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
+  const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 76px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {mode?: string, secondsPerChar?: number, autoResume?: boolean, extend?: boolean}) => void}} handlers
+   * @param {{onEnabled: (enabled: boolean) => void, onPinyin: (mode: string) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void, onAssist: (patch: {pause?: string, secondsPerChar?: number, extend?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1680,9 +1684,9 @@ var MC_PICKER = (() => {
      * `resolved`: the language actually used for each line on the current title
      * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing;
      * it only feeds the pill.
-     * @type {{enabled: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}}
+     * @type {{enabled: boolean, pinyin: string, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}, assist: {pause: string, secondsPerChar: number, extend: boolean}}}
      */
-    let state = { enabled: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
+    let state = { enabled: true, pinyin: 'below', resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false }, assist: { pause: 'off', secondsPerChar: 0.4, extend: true } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1843,35 +1847,16 @@ var MC_PICKER = (() => {
       // ---- reading assist ----
       panel.appendChild(el('Reading assist', HEAD_CSS + 'margin-top:10px;'));
       const as = state.assist;
-      const modes = [['off', 'Off'], ['pause', 'Pause before the caption vanishes']];
-      for (const [value, label] of modes) {
-        const row = document.createElement('label');
-        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;';
-        const r = document.createElement('input');
-        r.type = 'radio'; r.name = 'multicap-assist-mode'; r.checked = as.mode === value; r.style.cssText = RADIO_CSS + 'justify-self:start;';
-        r.addEventListener('change', () => handlers.onAssist({ mode: value }));
-        row.appendChild(r);
-        row.appendChild(el(label, 'flex:1;'));
-        panel.appendChild(row);
-      }
-      slider('Per character', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + 's', (v) => handlers.onAssist({ secondsPerChar: v }));
-      const ex = document.createElement('label');
-      ex.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
-      const exc = document.createElement('input');
-      exc.type = 'checkbox'; exc.checked = as.extend; exc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      exc.addEventListener('change', () => handlers.onAssist({ extend: exc.checked }));
-      ex.appendChild(exc);
-      ex.appendChild(el('Keep captions up into silence (any mode)', 'flex:1;'));
-      panel.appendChild(ex);
-      const ar = document.createElement('label');
-      ar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
-      const arc = document.createElement('input');
-      arc.type = 'checkbox'; arc.checked = as.autoResume; arc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      arc.addEventListener('change', () => handlers.onAssist({ autoResume: arc.checked }));
-      ar.appendChild(arc);
-      ar.appendChild(el('Resume automatically after the reading time', 'flex:1;'));
-      ar.appendChild(el('Ctrl+Shift+P', 'color:rgba(255,255,255,.45);font-size:12px;'));
-      panel.appendChild(ar);
+      const row = (/** @type {string} */ label, /** @type {HTMLElement} */ control) => {
+        const r = document.createElement('div');
+        r.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;';
+        r.appendChild(el(label, 'flex:1;'));
+        r.appendChild(control);
+        panel.appendChild(r);
+      };
+      row('Extend into silence', segmented([['off', 'Off'], ['on', 'On']], as.extend ? 'on' : 'off', (v) => handlers.onAssist({ extend: v === 'on' })));
+      row('Pause to read', segmented([['off', 'Off'], ['timed', 'Timed'], ['manual', 'Manual']], as.pause, (v) => handlers.onAssist({ pause: v })));
+      slider('Reading time', as.secondsPerChar, MC_SETTINGS.ASSIST_RANGES.secondsPerChar, 0.05, (v) => v.toFixed(2) + ' s/char', (v) => handlers.onAssist({ secondsPerChar: v }));
 
       const foot = document.createElement('label');
       foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';
@@ -2240,11 +2225,16 @@ var MC_PICKER = (() => {
   });
   /** The overlay's style, with the pinyin position folded in. @param {ReturnType<typeof MC_SETTINGS.get>} st */
   const overlayStyle = (st) => ({ ...st.style, rubyUnder: st.pinyin === 'below' });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(st.assist); return st; });
+  /** The assist's config from the setting: pause off / timed (auto-resume) / manual. @param {ReturnType<typeof MC_SETTINGS.get>} st */
+  const assistConfig = (st) => ({ mode: /** @type {'off' | 'pause'} */ (st.assist.pause === 'off' ? 'off' : 'pause'), secondsPerChar: st.assist.secondsPerChar, autoResume: st.assist.pause === 'timed' });
+  /** What Ctrl+Shift+P switches back to. */
+  let lastPauseMode = 'timed';
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist }); overlay.setStyle(overlayStyle(st)); assist.configure(assistConfig(st)); if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause; return st; });
   MC_SETTINGS.onChange((st) => {
     picker.setState({ enabled: st.enabled, pinyin: st.pinyin, style: st.style, assist: st.assist });
     overlay.setStyle(overlayStyle(st));
-    assist.configure(st.assist);
+    assist.configure(assistConfig(st));
+    if (st.assist.pause !== 'off') lastPauseMode = st.assist.pause;
     if (session) applyExtension(session);
     if (session) { session.lastKey = ''; ensurePinyin(session); }
     mark('settings', `enabled=${st.enabled} pinyin=${st.pinyin} style=${JSON.stringify(st.style)} assist=${JSON.stringify(st.assist)}`, { quiet: true });
@@ -2458,7 +2448,7 @@ var MC_PICKER = (() => {
     if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
     else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
-    else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { mode: MC_SETTINGS.get().assist.mode === 'off' ? 'pause' : 'off' } }); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyP') { MC_SETTINGS.save({ assist: { pause: /** @type {any} */ (MC_SETTINGS.get().assist.pause === 'off' ? lastPauseMode : 'off') } }); e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   function sessionSummary() {

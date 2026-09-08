@@ -12,7 +12,11 @@ var MC_SETTINGS = (() => {
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
    */
   /** @typedef {'none' | 'above' | 'below'} Pinyin */
-  /** @typedef {{mode: 'off' | 'pause', secondsPerChar: number, autoResume: boolean, extend: boolean}} Assist */
+  /**
+   * @typedef {{pause: 'off' | 'timed' | 'manual', secondsPerChar: number, extend: boolean}} Assist
+   * pause: hold the caption before it vanishes and resume after the reading time (timed) or
+   * wait for the viewer (manual); extend: let captions linger into silence.
+   */
   /** @typedef {{enabled: boolean, pinyin: Pinyin, style: Style, assist: Assist}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
@@ -22,9 +26,9 @@ var MC_SETTINGS = (() => {
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
   /** @type {Assist} */
-  const DEFAULT_ASSIST = { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true };
+  const DEFAULT_ASSIST = { pause: 'off', secondsPerChar: 0.4, extend: true };
   const ASSIST_RANGES = { secondsPerChar: [0.15, 1.0] };
-  const ASSIST_MODES = ['off', 'pause'];
+  const PAUSE_MODES = ['off', 'timed', 'manual'];
   const DEFAULTS = { enabled: true, pinyin: 'below', style: DEFAULT_STYLE, assist: DEFAULT_ASSIST };
   /** @type {Settings | null} */
   let cache = null;
@@ -60,11 +64,11 @@ var MC_SETTINGS = (() => {
     st.backdrop = st.backdrop === true;
     s.style = st;
     const a = { ...DEFAULT_ASSIST, ...(s.assist && typeof s.assist === 'object' ? s.assist : {}) };
-    a.mode = a.mode === 'slow' || a.mode === 'slowpause' ? 'pause' : ASSIST_MODES.includes(a.mode) ? a.mode : 'off'; // slow modes were removed
-    delete a.minRate;
-    delete a.lastMode;
+    // earlier builds stored mode ('off' | 'pause' | 'slow' | 'slowpause') + autoResume
+    if (typeof a.mode === 'string') { a.pause = a.mode === 'off' ? 'off' : a.autoResume === false ? 'manual' : 'timed'; }
+    if (!PAUSE_MODES.includes(a.pause)) a.pause = 'off';
+    delete a.mode; delete a.autoResume; delete a.minRate; delete a.lastMode;
     a.secondsPerChar = clamp(a.secondsPerChar, ASSIST_RANGES.secondsPerChar, DEFAULT_ASSIST.secondsPerChar);
-    a.autoResume = a.autoResume !== false;
     a.extend = a.extend !== false;
     s.assist = a;
     return s;
@@ -85,5 +89,5 @@ var MC_SETTINGS = (() => {
   /** @param {(s: Settings) => void} fn */
   function onChange(fn) { listeners.push(fn); }
 
-  return { DEFAULTS, DEFAULT_STYLE, RANGES, PINYIN_MODES, DEFAULT_ASSIST, ASSIST_RANGES, ASSIST_MODES, load, save, get, onChange, normalize };
+  return { DEFAULTS, DEFAULT_STYLE, RANGES, PINYIN_MODES, DEFAULT_ASSIST, ASSIST_RANGES, PAUSE_MODES, load, save, get, onChange, normalize };
 })();
