@@ -77,13 +77,14 @@
     const gen = ++videoGen;
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
+    clock.onSeek();
     if (session) overlay.attach(v, SLOTS);
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
         let extra = '';
         if (ev === 'durationchange' || ev === 'loadedmetadata') extra = '  ' + durationVsManifest(v);
-        else if (ev === 'seeking') extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`;
+        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); }
         else if (ev === 'seeked') extra = '  ' + clockLine();
         mark('video:' + ev, videoDesc(v) + extra);
       });
@@ -214,9 +215,10 @@
       if (t === ttLast) return;
       ttLast = t;
       ttCount++;
+      const media = video ? video.currentTime : 0;
+      if (t) clock.observeNative(t, media);
       const c = clock.now();
       nativeCues.push({ media: mt(), content: c.t, text: t });
-      if (t) onNativeCue(t, c.t);
       if (ttCount <= 8) mark('native:cue', t ? `content=${c.t.toFixed(3)} "${t.slice(0, 80)}"` : '(cleared)');
       else if (ttCount === 9) mark('native:cue', '… further native cue changes recorded silently (see summary / __multicap.sync())');
     });
@@ -248,7 +250,7 @@
 
   /** Two slots: top line, bottom line. Which language fills each is a persisted setting. */
   const SLOTS = 2;
-  const clock = MC_CLOCK.create(bridge, () => video);
+  const clock = MC_CLOCK.create(bridge, () => video, () => domAd);
   const overlay = MC_OVERLAY.create();
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
@@ -268,7 +270,7 @@
   /** Parsed cue lists by `${movieId}|${trackId}`, so switching a slot back and forth is instant. */
   const cueCache = new Map();
 
-  /** @typedef {{begin: number, end: number, text: string, settings: string}} Cue */
+  /** @typedef {{begin: number, end: number, text: string, settings: string, norm?: string}} Cue */
   /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}}} Line */
   /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
   /** @type {Session | null} */
@@ -338,6 +340,7 @@
       for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
       if (!parsed.cues.length) return null;
       cues = parsed.cues;
+      for (const cue of cues) cue.norm = MC_SUBS.normalizeForMatch(cue.text);
       cueCache.set(key, cues);
       if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
     }
@@ -408,45 +411,31 @@
       cueChanges: session.cueChanges, overlayMounted: overlay.mounted, pickerMounted: picker.mounted, settings: st,
       clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
       showing: session.lines.map((l) => (l ? MC_SUBS.activeCues(l.cues, c.t, { i: l.cursor.i }).map((x) => x.text).join('\n') : '')),
-      pauseAdPresent, controlsVisible,
+      pauseAdPresent, controlsVisible, clockStatus: clock.status(),
     };
   }
 
-  // ---- Layer C measurement: native cue text vs parsed cue timing --------------------------
-  // For every native cue that appears, find the parsed cue with the same normalized text
-  // near the current content time and record (contentTime − cue.begin). Zero means the
-  // player's clock and the WebVTT agree; a step means an ad offset we failed to account for.
-  /** @type {ReturnType<typeof U.ring<{content: number, begin: number, delta: number, text: string}>>} */
-  const syncSamples = U.ring(200);
-  let unmatchedNative = 0;
-
-  /** @param {string} nativeText @param {number} contentTime */
-  function onNativeCue(nativeText, contentTime) {
-    if (!session || !session.lines.some(Boolean)) return;
-    const want = MC_SUBS.normalizeForMatch(nativeText);
-    if (!want) return;
-    /** @type {Cue | null} */
-    let best = null;
-    let bestDist = Infinity;
+  // ---- layer C matcher: native cue text → parsed cue start time ----------------------------
+  // Cue text is normalized once at load (cue.norm). With an estimate, only cues within the
+  // clock's window are considered and the nearest wins; without one, a unique text is required.
+  clock.setMatcher((text, estimate) => {
+    if (!session) return null;
+    const want = MC_SUBS.normalizeForMatch(text);
+    if (!want) return null;
+    /** @type {number[]} */
+    const hits = [];
     for (const line of session.lines) {
       if (!line) continue;
       for (const cue of line.cues) {
-        if (Math.abs(cue.begin - contentTime) > 20) continue;
-        if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
-        const d = Math.abs(cue.begin - contentTime);
-        if (d < bestDist) { best = cue; bestDist = d; }
+        if (estimate != null && Math.abs(cue.begin - estimate) > 60) continue;
+        if (cue.norm === want) hits.push(cue.begin);
       }
     }
-    if (!best) { unmatchedNative++; return; }
-    syncSamples.push({ content: +contentTime.toFixed(3), begin: best.begin, delta: +(contentTime - best.begin).toFixed(3), text: nativeText.slice(0, 40) });
-  }
-
-  function syncReport() {
-    const items = syncSamples.items();
-    const deltas = items.map((x) => x.delta).sort((a, b) => a - b);
-    const median = deltas.length ? deltas[deltas.length >> 1] : null;
-    return { matched: items.length, unmatched: unmatchedNative, medianDelta: median, minDelta: deltas[0] ?? null, maxDelta: deltas[deltas.length - 1] ?? null, last: items.slice(-8) };
-  }
+    if (!hits.length) return null;
+    if (estimate == null) return { begin: hits[0], ambiguous: hits.length > 1 };
+    hits.sort((a, b) => Math.abs(a - estimate) - Math.abs(b - estimate));
+    return { begin: hits[0], ambiguous: hits.length > 1 && Math.abs(hits[1] - estimate) < 60 };
+  });
 
   // ---- bridge wiring -----------------------------------------------------------------
 
@@ -485,7 +474,7 @@
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });
-  bridge.handle('sync', syncReport);
+  bridge.handle('sync', () => clock.status());
 
   // ---- boot --------------------------------------------------------------------------
 

@@ -810,45 +810,156 @@ var MC_SUBS = (() => {
 /*
  * clock.js — the one place that answers "what content time is it, and are we in an ad?"
  *
- * Sources, in order:
- *   1. player — Netflix's player API via the page hook: getSegmentTime() (content ms,
- *               frozen during ads) plus the ad manager's adPresenting flag. Verified
- *               2026-09-07 across mid-rolls, pre-rolls, seeks, and pauses.
- *   2. video  — video.currentTime with no correction. Only a stopgap: media time
- *               diverges from content time after ads and after seeks (see
- *               docs/phase0-findings.md). Phase 3 adds native-cue calibration
- *               (Layer C) on top of this source.
+ * Inputs, layered so each can fail on its own (docs/phase0-findings.md):
+ *   player  — Netflix's player API via the page hook: getSegmentTime() is content time in
+ *             ms and freezes during ads; the ad manager's adPresenting is the in-ad flag.
+ *             Primary when available.
+ *   layer C — self-calibration: every time Netflix's own (invisible) subtitle layer shows
+ *             a cue, match its text against our parsed cues and derive
+ *             offset = cue.begin − video.currentTime. Content time is then
+ *             video.currentTime + offset. Offsets are piecewise constant (they step at
+ *             every ad break and every seek), so a new value is adopted after two
+ *             agreeing samples, or immediately when nothing is known yet.
+ *             Fallback clock, and a cross-check on the player clock when both exist.
+ *   layer B — DOM: [data-uia="ads-info-container"] exists exactly while an ad plays.
+ *             Fallback for the in-ad flag.
  */
 var MC_CLOCK = (() => {
+  /** Netflix paints its cue about this much before the WebVTT start time on the player's clock (measured 2026-09-07). */
+  const LEAD_S = 0.1;
+  /** Two offset samples closer than this are "the same" offset. */
+  const STEP_S = 0.5;
+  /** Search radius (s) around the current estimate when matching a native cue. */
+  const WINDOW_S = 60;
+  /** Player vs layer C disagreement that earns a warning. */
+  const DIVERGE_S = 1.0;
+  const HISTORY = 5;
+  /** Frames without a player clock before we announce the fallback. */
+  const FALLBACK_AFTER_FRAMES = 60;
+
+  /** @param {number[]} xs */
+  function median(xs) {
+    const s = xs.slice().sort((a, b) => a - b);
+    return s.length ? s[s.length >> 1] : 0;
+  }
+
   /**
    * @param {{call: (name: string, arg?: any) => any}} bridge
    * @param {() => HTMLVideoElement | null} getVideo
+   * @param {() => boolean} getDomAd layer B: is the DOM ad badge present?
    */
-  function create(bridge, getVideo) {
-    let failures = 0;
-    let warned = false;
+  function create(bridge, getVideo, getDomAd) {
     let source = 'none';
-    return {
-      /** @returns {{t: number, inAd: boolean, source: string, movieId: any}} t is content seconds */
-      now() {
-        let r = null;
-        try { r = bridge.call('t'); } catch { r = null; }
-        if (r && typeof r[0] === 'number') {
+    let playerFailures = 0;
+    let fallbackAnnounced = false;
+    let divergenceWarned = false;
+    /** @type {null | ((text: string, estimate: number | null) => {begin: number, ambiguous: boolean} | null)} */
+    let matcher = null;
+    let lastInAd = false;
+    /** @type {number | null} last player content time (s), for disambiguation and cross-checking */
+    let lastPlayerT = null;
+
+    // layer C state
+    let offset = 0;
+    let offsetKnown = false;
+    /** @type {number | null} */
+    let pending = null;
+    /** @type {number[]} */
+    let accepted = [];
+    let unmatched = 0;
+    let steps = 0;
+    /** @type {ReturnType<typeof MC_UTIL.ring<{media: number, begin: number, offset: number, text: string, player: number | null, div: number | null}>>} */
+    const matches = MC_UTIL.ring(60);
+    /** @type {number[]} */
+    let divergences = [];
+
+    /** @returns {{t: number, inAd: boolean, source: string, movieId: any}} t is content seconds */
+    function now() {
+      const v = getVideo();
+      const media = v ? v.currentTime : 0;
+      let r = null;
+      try { r = bridge.call('t'); } catch { r = null; }
+      const contentMs = r && typeof r[0] === 'number' ? r[0] : null;
+      const adFlag = r && typeof r[1] === 'boolean' ? r[1] : null;
+      const inAd = adFlag !== null ? adFlag : !!getDomAd();
+      lastInAd = inAd;
+      if (contentMs !== null) {
+        if (source !== 'player') {
+          if (source === 'video') MC_UTIL.log('clock: player content clock is back; leaving layer C fallback');
           source = 'player';
-          failures = 0;
-          return { t: r[0] / 1000, inAd: !!r[1], source, movieId: r[2] };
         }
-        failures++;
-        if (failures === 60 && !warned) {
-          warned = true;
-          MC_UTIL.warn('player clock unavailable for 60 frames; falling back to video.currentTime with no ad correction. See MC_NFLX.watchPlayer / contentTimeMs.');
-        }
+        playerFailures = 0;
+        fallbackAnnounced = false;
+        lastPlayerT = contentMs / 1000;
+        return { t: lastPlayerT + LEAD_S, inAd, source, movieId: r[2] };
+      }
+      playerFailures++;
+      lastPlayerT = null;
+      if (playerFailures >= FALLBACK_AFTER_FRAMES && !fallbackAnnounced) {
+        fallbackAnnounced = true;
         source = 'video';
-        const v = getVideo();
-        return { t: v ? v.currentTime : 0, inAd: false, source, movieId: null };
-      },
-      get source() { return source; },
-    };
+        MC_UTIL.warn(`clock: no player content clock for ${FALLBACK_AFTER_FRAMES} frames (${r ? 'getSegmentTime missing/throwing' : 'no watch player'}); using video.currentTime + layer C offset (${offsetKnown ? offset.toFixed(3) + 's' : 'unknown yet, assuming 0'}). Netflix's own subtitles must be ON for layer C to calibrate.`);
+      }
+      if (source !== 'player') source = 'video';
+      return { t: media + offset, inAd, source, movieId: r ? r[2] : null };
+    }
+
+    /** @param {(text: string, estimate: number | null) => {begin: number, ambiguous: boolean} | null} fn */
+    function setMatcher(fn) { matcher = fn; }
+
+    /**
+     * Feed a native cue appearance. `media` is video.currentTime at that moment.
+     * @param {string} text @param {number} media
+     */
+    function observeNative(text, media) {
+      if (!matcher || lastInAd) return;
+      const estimate = offsetKnown ? media + offset : null;
+      const hint = estimate ?? lastPlayerT;
+      const m = matcher(text, hint);
+      if (!m) { unmatched++; return; }
+      if (m.ambiguous && hint == null) return; // wait for a cue whose text is unique
+      const o = m.begin - media;
+      if (!offsetKnown) {
+        offset = o; offsetKnown = true; accepted = [o]; pending = null;
+      } else if (Math.abs(o - offset) < STEP_S) {
+        accepted.push(o);
+        if (accepted.length > HISTORY) accepted.shift();
+        offset = median(accepted);
+        pending = null;
+      } else if (pending !== null && Math.abs(o - pending) < STEP_S) {
+        const prev = offset;
+        offset = (o + pending) / 2; accepted = [pending, o]; pending = null; steps++;
+        MC_UTIL.log(`clock: layer C offset stepped ${prev.toFixed(3)}s → ${offset.toFixed(3)}s (confirmed by 2 cues)`);
+      } else {
+        pending = o;
+      }
+      const div = lastPlayerT != null ? +(lastPlayerT - (media + offset)).toFixed(3) : null;
+      if (div != null) {
+        divergences.push(div);
+        if (divergences.length > 8) divergences.shift();
+        if (divergences.length >= 3 && Math.abs(median(divergences)) > DIVERGE_S && !divergenceWarned) {
+          divergenceWarned = true;
+          MC_UTIL.warn(`clock: player clock and layer C disagree by ${median(divergences).toFixed(2)}s (median of ${divergences.length}). One of them changed meaning; check getSegmentTime() vs native cue timing.`);
+        }
+      }
+      matches.push({ media: +media.toFixed(3), begin: m.begin, offset: +o.toFixed(3), text: text.slice(0, 40), player: lastPlayerT != null ? +lastPlayerT.toFixed(3) : null, div });
+    }
+
+    /** A seek or a new <video> element: the media→content mapping is unknown again (plain seeks re-base it to 0). */
+    function onSeek() {
+      offset = 0; offsetKnown = false; pending = null; accepted = []; divergences = [];
+    }
+
+    function status() {
+      return {
+        source, playerFailures, lead: LEAD_S,
+        layerC: { offset: +offset.toFixed(3), known: offsetKnown, pending, accepted: accepted.map((x) => +x.toFixed(3)), steps, matched: matches.length, unmatched },
+        divergence: { n: divergences.length, median: divergences.length ? +median(divergences).toFixed(3) : null, last: divergences.slice(-4) },
+        recent: matches.items().slice(-6),
+      };
+    }
+
+    return { now, setMatcher, observeNative, onSeek, status, get source() { return source; } };
   }
   return { create };
 })();
@@ -1296,13 +1407,14 @@ var MC_PICKER = (() => {
     const gen = ++videoGen;
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
+    clock.onSeek();
     if (session) overlay.attach(v, SLOTS);
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
         let extra = '';
         if (ev === 'durationchange' || ev === 'loadedmetadata') extra = '  ' + durationVsManifest(v);
-        else if (ev === 'seeking') extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`;
+        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); }
         else if (ev === 'seeked') extra = '  ' + clockLine();
         mark('video:' + ev, videoDesc(v) + extra);
       });
@@ -1433,9 +1545,10 @@ var MC_PICKER = (() => {
       if (t === ttLast) return;
       ttLast = t;
       ttCount++;
+      const media = video ? video.currentTime : 0;
+      if (t) clock.observeNative(t, media);
       const c = clock.now();
       nativeCues.push({ media: mt(), content: c.t, text: t });
-      if (t) onNativeCue(t, c.t);
       if (ttCount <= 8) mark('native:cue', t ? `content=${c.t.toFixed(3)} "${t.slice(0, 80)}"` : '(cleared)');
       else if (ttCount === 9) mark('native:cue', '… further native cue changes recorded silently (see summary / __multicap.sync())');
     });
@@ -1467,7 +1580,7 @@ var MC_PICKER = (() => {
 
   /** Two slots: top line, bottom line. Which language fills each is a persisted setting. */
   const SLOTS = 2;
-  const clock = MC_CLOCK.create(bridge, () => video);
+  const clock = MC_CLOCK.create(bridge, () => video, () => domAd);
   const overlay = MC_OVERLAY.create();
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
@@ -1487,7 +1600,7 @@ var MC_PICKER = (() => {
   /** Parsed cue lists by `${movieId}|${trackId}`, so switching a slot back and forth is instant. */
   const cueCache = new Map();
 
-  /** @typedef {{begin: number, end: number, text: string, settings: string}} Cue */
+  /** @typedef {{begin: number, end: number, text: string, settings: string, norm?: string}} Cue */
   /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}}} Line */
   /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
   /** @type {Session | null} */
@@ -1557,6 +1670,7 @@ var MC_PICKER = (() => {
       for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
       if (!parsed.cues.length) return null;
       cues = parsed.cues;
+      for (const cue of cues) cue.norm = MC_SUBS.normalizeForMatch(cue.text);
       cueCache.set(key, cues);
       if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
     }
@@ -1627,45 +1741,31 @@ var MC_PICKER = (() => {
       cueChanges: session.cueChanges, overlayMounted: overlay.mounted, pickerMounted: picker.mounted, settings: st,
       clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
       showing: session.lines.map((l) => (l ? MC_SUBS.activeCues(l.cues, c.t, { i: l.cursor.i }).map((x) => x.text).join('\n') : '')),
-      pauseAdPresent, controlsVisible,
+      pauseAdPresent, controlsVisible, clockStatus: clock.status(),
     };
   }
 
-  // ---- Layer C measurement: native cue text vs parsed cue timing --------------------------
-  // For every native cue that appears, find the parsed cue with the same normalized text
-  // near the current content time and record (contentTime − cue.begin). Zero means the
-  // player's clock and the WebVTT agree; a step means an ad offset we failed to account for.
-  /** @type {ReturnType<typeof U.ring<{content: number, begin: number, delta: number, text: string}>>} */
-  const syncSamples = U.ring(200);
-  let unmatchedNative = 0;
-
-  /** @param {string} nativeText @param {number} contentTime */
-  function onNativeCue(nativeText, contentTime) {
-    if (!session || !session.lines.some(Boolean)) return;
-    const want = MC_SUBS.normalizeForMatch(nativeText);
-    if (!want) return;
-    /** @type {Cue | null} */
-    let best = null;
-    let bestDist = Infinity;
+  // ---- layer C matcher: native cue text → parsed cue start time ----------------------------
+  // Cue text is normalized once at load (cue.norm). With an estimate, only cues within the
+  // clock's window are considered and the nearest wins; without one, a unique text is required.
+  clock.setMatcher((text, estimate) => {
+    if (!session) return null;
+    const want = MC_SUBS.normalizeForMatch(text);
+    if (!want) return null;
+    /** @type {number[]} */
+    const hits = [];
     for (const line of session.lines) {
       if (!line) continue;
       for (const cue of line.cues) {
-        if (Math.abs(cue.begin - contentTime) > 20) continue;
-        if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
-        const d = Math.abs(cue.begin - contentTime);
-        if (d < bestDist) { best = cue; bestDist = d; }
+        if (estimate != null && Math.abs(cue.begin - estimate) > 60) continue;
+        if (cue.norm === want) hits.push(cue.begin);
       }
     }
-    if (!best) { unmatchedNative++; return; }
-    syncSamples.push({ content: +contentTime.toFixed(3), begin: best.begin, delta: +(contentTime - best.begin).toFixed(3), text: nativeText.slice(0, 40) });
-  }
-
-  function syncReport() {
-    const items = syncSamples.items();
-    const deltas = items.map((x) => x.delta).sort((a, b) => a - b);
-    const median = deltas.length ? deltas[deltas.length >> 1] : null;
-    return { matched: items.length, unmatched: unmatchedNative, medianDelta: median, minDelta: deltas[0] ?? null, maxDelta: deltas[deltas.length - 1] ?? null, last: items.slice(-8) };
-  }
+    if (!hits.length) return null;
+    if (estimate == null) return { begin: hits[0], ambiguous: hits.length > 1 };
+    hits.sort((a, b) => Math.abs(a - estimate) - Math.abs(b - estimate));
+    return { begin: hits[0], ambiguous: hits.length > 1 && Math.abs(hits[1] - estimate) < 60 };
+  });
 
   // ---- bridge wiring -----------------------------------------------------------------
 
@@ -1704,7 +1804,7 @@ var MC_PICKER = (() => {
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });
-  bridge.handle('sync', syncReport);
+  bridge.handle('sync', () => clock.status());
 
   // ---- boot --------------------------------------------------------------------------
 
