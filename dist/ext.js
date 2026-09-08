@@ -1689,7 +1689,7 @@ var MC_PICKER = (() => {
         if (video !== v) return;
         let extra = '';
         if (ev === 'durationchange' || ev === 'loadedmetadata') extra = '  ' + durationVsManifest(v);
-        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); }
+        else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); if (session) session.lastShown = null; }
         else if (ev === 'seeked') extra = '  ' + clockLine();
         mark('video:' + ev, videoDesc(v) + extra);
       });
@@ -1881,7 +1881,9 @@ var MC_PICKER = (() => {
 
   /** @typedef {{begin: number, end: number, text: string, settings: string, norm?: string}} Cue */
   /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}, hans: boolean}} Line */
-  /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
+  /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number, lastShown: {texts: string[], end: number} | null}} Session */
+  /** While paused, keep the last caption up if it ended no more than this many seconds before the pause point. */
+  const STICKY_S = 4;
   /** @type {Session | null} */
   let session = null;
 
@@ -1902,7 +1904,7 @@ var MC_PICKER = (() => {
     const rows = tracksFor(movieId);
     picker.setTracks(rows);
     /** @type {Session} */
-    const s = { movieId, lines: [], raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0 };
+    const s = { movieId, lines: [], raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0, lastShown: null };
     session = s;
     mark('session:start', `movieId=${movieId} slots=${st.langs.map((l) => l || 'off').join(' / ')} (${why})`);
     const lines = await Promise.all(st.langs.map((lang, i) => loadLine(movieId, rows, lang, i)));
@@ -1991,8 +1993,19 @@ var MC_PICKER = (() => {
     if (!overlay.mounted) overlay.attach(video, SLOTS);
     const c = clock.now();
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
-    const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled || pauseAdPresent;
-    const texts = s.lines.map((l) => (hidden || !l ? '' : MC_SUBS.activeCues(l.cues, c.t, l.cursor).map((x) => x.text).join('\n')));
+    const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled;
+    let texts = s.lines.map(() => '');
+    if (!hidden) {
+      let end = -Infinity;
+      texts = s.lines.map((l) => {
+        if (!l) return '';
+        const active = MC_SUBS.activeCues(l.cues, c.t, l.cursor);
+        for (const x of active) end = Math.max(end, x.end);
+        return active.map((x) => x.text).join('\n');
+      });
+      if (texts.some(Boolean)) s.lastShown = { texts, end };
+      else if (video.paused && s.lastShown && c.t >= s.lastShown.end - 0.5 && c.t - s.lastShown.end <= STICKY_S) texts = s.lastShown.texts; // reading time while paused
+    }
     const pinyin = MC_SETTINGS.get().pinyin && MC_PINYIN.isReady();
     const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
