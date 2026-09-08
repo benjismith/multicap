@@ -7,7 +7,8 @@
     "build": "node build.js",
     "watch": "node build.js --watch",
     "typecheck": "tsc -p jsconfig.json",
-    "check": "npm run typecheck && npm run build"
+    "check": "npm run typecheck && npm run build",
+    "build:pinyin": "node tools/build-pinyin.js"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
