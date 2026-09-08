@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "multicap",
+  "version": "0.0.1",
+  "description": "Dual-language Netflix subtitles (personal tool). Phase 0: instrumentation only — captures manifests and logs ad/timing observations.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["*://*.netflix.com/*"],
+      "js": ["src/netflix.js", "src/util.js", "src/bridge.js", "src/page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://*.netflix.com/*"],
+      "js": ["src/netflix.js", "src/util.js", "src/bridge.js", "src/content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ]
+}

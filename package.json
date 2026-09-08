@@ -1,0 +1,13 @@
+{
+  "name": "multicap",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Dual-language Netflix subtitles (personal Chrome extension). No build step: the extension loads src/ as-is; tsc is used for type-checking only.",
+  "scripts": {
+    "typecheck": "tsc -p jsconfig.json"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "typescript": "^5.6.0"
+  }
+}
