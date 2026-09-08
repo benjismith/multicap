@@ -14,6 +14,9 @@ var MC_OVERLAY = (() => {
   /** Base font size as a fraction of the picture box height, before the user's scale. */
   const BASE_SIZE_RATIO = 0.042;
   const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
+  const WORD_CSS = 'display:inline-block;margin:0 0.12em;white-space:nowrap;';
+  const RUBY_CSS = 'ruby-position:over;ruby-align:center;';
+  const RT_CSS = 'font-size:0.42em;line-height:1.1;font-weight:400;letter-spacing:0;color:rgba(255,255,255,.9);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:0 0 4px rgba(0,0,0,.9),0 0 2px #000;';
 
   function create() {
     /** @type {HTMLDivElement | null} */
@@ -98,10 +101,38 @@ var MC_OVERLAY = (() => {
     }
 
     /**
+     * Fill a line: plain text, or ruby per character when annotation segments are given.
+     * @param {HTMLElement} el @param {string} text
+     * @param {Array<{text: string, syl: string[] | null, word: boolean}> | null} segs
+     */
+    function fill(el, text, segs) {
+      el.textContent = '';
+      if (!segs) { el.textContent = text; return; }
+      for (const s of segs) {
+        if (!s.syl) { el.appendChild(document.createTextNode(s.text)); continue; }
+        const w = document.createElement('span');
+        w.className = 'multicap-word';
+        w.style.cssText = WORD_CSS;
+        [...s.text].forEach((c, i) => {
+          const ruby = document.createElement('ruby');
+          ruby.style.cssText = RUBY_CSS;
+          ruby.appendChild(document.createTextNode(c));
+          const rt = document.createElement('rt');
+          rt.style.cssText = RT_CSS;
+          rt.textContent = (s.syl && s.syl[i]) || '';
+          ruby.appendChild(rt);
+          w.appendChild(ruby);
+        });
+        el.appendChild(w);
+      }
+    }
+
+    /**
      * @param {string[]} texts one per line ('' hides that line)
      * @param {boolean} visible false blanks everything (ads, pause ads, user toggle)
+     * @param {Array<Array<{text: string, syl: string[] | null, word: boolean}> | null>} [annos] per-line ruby segments
      */
-    function render(texts, visible) {
+    function render(texts, visible, annos = []) {
       if (!root) return;
       if (visible !== lastVisible) {
         lastVisible = visible;
@@ -109,9 +140,10 @@ var MC_OVERLAY = (() => {
       }
       for (let i = 0; i < lines.length; i++) {
         const t = texts[i] ?? '';
-        if (t === lastTexts[i]) continue;
-        lastTexts[i] = t;
-        lines[i].textContent = t;
+        const key = t + (annos[i] ? '\u0001ruby' : '');
+        if (key === lastTexts[i]) continue;
+        lastTexts[i] = key;
+        fill(lines[i], t, annos[i] || null);
         lines[i].style.display = t ? '' : 'none';
       }
     }

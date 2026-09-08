@@ -27,5 +27,15 @@
       "run_at": "document_start",
       "world": "ISOLATED"
     }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "data/pinyin.json"
+      ],
+      "matches": [
+        "*://*.netflix.com/*"
+      ]
+    }
   ]
 }

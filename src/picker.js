@@ -28,7 +28,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -41,8 +41,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}}} */
-    let state = { langs: [null, null], enabled: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false } };
+    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}}} */
+    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -85,7 +85,7 @@ var MC_PICKER = (() => {
       renderPanel();
     }
 
-    /** @param {{langs?: Array<string | null>, enabled?: boolean, resolved?: Array<string | null>, style?: any}} st */
+    /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -213,6 +213,15 @@ var MC_PICKER = (() => {
       slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
       slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
       slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
+      const py = document.createElement('label');
+      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const pyc = document.createElement('input');
+      pyc.type = 'checkbox'; pyc.checked = state.pinyin; pyc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      pyc.addEventListener('change', () => handlers.onPinyin(pyc.checked));
+      py.appendChild(pyc);
+      py.appendChild(el('Pinyin over Simplified Chinese', 'flex:1;'));
+      panel.appendChild(py);
+
       const bd = document.createElement('label');
       bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
       const bdc = document.createElement('input');

@@ -996,6 +996,9 @@ var MC_OVERLAY = (() => {
   /** Base font size as a fraction of the picture box height, before the user's scale. */
   const BASE_SIZE_RATIO = 0.042;
   const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
+  const WORD_CSS = 'display:inline-block;margin:0 0.12em;white-space:nowrap;';
+  const RUBY_CSS = 'ruby-position:over;ruby-align:center;';
+  const RT_CSS = 'font-size:0.42em;line-height:1.1;font-weight:400;letter-spacing:0;color:rgba(255,255,255,.9);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:0 0 4px rgba(0,0,0,.9),0 0 2px #000;';
 
   function create() {
     /** @type {HTMLDivElement | null} */
@@ -1080,10 +1083,38 @@ var MC_OVERLAY = (() => {
     }
 
     /**
+     * Fill a line: plain text, or ruby per character when annotation segments are given.
+     * @param {HTMLElement} el @param {string} text
+     * @param {Array<{text: string, syl: string[] | null, word: boolean}> | null} segs
+     */
+    function fill(el, text, segs) {
+      el.textContent = '';
+      if (!segs) { el.textContent = text; return; }
+      for (const s of segs) {
+        if (!s.syl) { el.appendChild(document.createTextNode(s.text)); continue; }
+        const w = document.createElement('span');
+        w.className = 'multicap-word';
+        w.style.cssText = WORD_CSS;
+        [...s.text].forEach((c, i) => {
+          const ruby = document.createElement('ruby');
+          ruby.style.cssText = RUBY_CSS;
+          ruby.appendChild(document.createTextNode(c));
+          const rt = document.createElement('rt');
+          rt.style.cssText = RT_CSS;
+          rt.textContent = (s.syl && s.syl[i]) || '';
+          ruby.appendChild(rt);
+          w.appendChild(ruby);
+        });
+        el.appendChild(w);
+      }
+    }
+
+    /**
      * @param {string[]} texts one per line ('' hides that line)
      * @param {boolean} visible false blanks everything (ads, pause ads, user toggle)
+     * @param {Array<Array<{text: string, syl: string[] | null, word: boolean}> | null>} [annos] per-line ruby segments
      */
-    function render(texts, visible) {
+    function render(texts, visible, annos = []) {
       if (!root) return;
       if (visible !== lastVisible) {
         lastVisible = visible;
@@ -1091,9 +1122,10 @@ var MC_OVERLAY = (() => {
       }
       for (let i = 0; i < lines.length; i++) {
         const t = texts[i] ?? '';
-        if (t === lastTexts[i]) continue;
-        lastTexts[i] = t;
-        lines[i].textContent = t;
+        const key = t + (annos[i] ? '\u0001ruby' : '');
+        if (key === lastTexts[i]) continue;
+        lastTexts[i] = key;
+        fill(lines[i], t, annos[i] || null);
         lines[i].style.display = t ? '' : 'none';
       }
     }
@@ -1118,14 +1150,14 @@ var MC_SETTINGS = (() => {
    * scale: overall font size multiplier; bottom: distance from the picture's bottom edge in %;
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
    */
-  /** @typedef {{langs: Array<string | null>, enabled: boolean, style: Style}} Settings */
+  /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
   const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
   /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
-  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, style: DEFAULT_STYLE };
+  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -1149,6 +1181,7 @@ var MC_SETTINGS = (() => {
     if (!Array.isArray(s.langs)) s.langs = DEFAULTS.langs.slice();
     s.langs = [0, 1].map((i) => (typeof s.langs[i] === 'string' && s.langs[i] ? s.langs[i] : null));
     s.enabled = s.enabled !== false;
+    s.pinyin = s.pinyin !== false;
     const st = { ...DEFAULT_STYLE, ...(s.style && typeof s.style === 'object' ? s.style : {}) };
     const clamp = (/** @type {any} */ v, /** @type {number[]} */ r, /** @type {number} */ d) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(r[1], Math.max(r[0], v)) : d);
     st.scale = clamp(st.scale, RANGES.scale, DEFAULT_STYLE.scale);
@@ -1159,7 +1192,7 @@ var MC_SETTINGS = (() => {
     return s;
   }
 
-  /** @param {{langs?: Array<string | null>, enabled?: boolean, style?: Partial<Style>}} patch @returns {Promise<Settings>} */
+  /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: Partial<Style>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
     cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) } });
@@ -1175,6 +1208,134 @@ var MC_SETTINGS = (() => {
   function onChange(fn) { listeners.push(fn); }
 
   return { DEFAULTS, DEFAULT_STYLE, RANGES, load, save, get, onChange, normalize };
+})();
+
+// ===== src/pinyin.js =====
+// @ts-check
+/*
+ * pinyin.js — annotate a Simplified Chinese line with per-character pinyin (isolated world).
+ *
+ * Dictionary: data/pinyin.json, built by tools/build-pinyin.js from the DuiDuiDui corpus
+ * (words → one syllable per character; characters → readings in sense order). Loaded once,
+ * lazily, through the extension's own URL.
+ *
+ * Segmentation: Intl.Segmenter word boundaries first (ICU's Chinese dictionary), then the
+ * longest dictionary match inside any chunk the dictionary does not know, then single
+ * characters with their first reading. Word lookup is what gets heteronyms right
+ * (银行 yín háng, 睡着 shuì zháo); the per-character fallback is sense-ordered so 了 → le,
+ * 地 → de, 得 → de on their own.
+ */
+var MC_PINYIN = (() => {
+  /** @typedef {{text: string, syl: string[] | null, word: boolean}} Segment  syl null = not annotated */
+  const HAN = /\p{Script=Han}/u;
+  const MAX_WORD = 6;
+
+  /** @type {{words: Record<string, string>, chars: Record<string, string[]>, meta?: any} | null} */
+  let dict = null;
+  /** @type {Promise<any> | null} */
+  let loading = null;
+  /** @type {Intl.Segmenter | null} */
+  let segmenter = null;
+  /** @type {Map<string, Segment[]>} */
+  const cache = new Map();
+
+  /** @param {any} d */
+  function use(d) {
+    if (!d || typeof d !== 'object' || !d.words || !d.chars) throw new Error('pinyin: not a dictionary');
+    dict = d;
+    cache.clear();
+    try { segmenter = new Intl.Segmenter('zh-Hans', { granularity: 'word' }); } catch { segmenter = null; }
+  }
+
+  /** @param {string} url @returns {Promise<void>} */
+  function load(url) {
+    if (dict) return Promise.resolve();
+    if (!loading) {
+      loading = fetch(url)
+        .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then((d) => { use(d); })
+        .catch((err) => { loading = null; throw err; });
+    }
+    return loading;
+  }
+
+  function isReady() { return !!dict; }
+
+  /** Split into runs of Han vs non-Han. @param {string} s */
+  function runs(s) {
+    /** @type {Array<{text: string, han: boolean}>} */
+    const out = [];
+    for (const ch of s) {
+      const han = HAN.test(ch);
+      const last = out[out.length - 1];
+      if (last && last.han === han) last.text += ch; else out.push({ text: ch, han });
+    }
+    return out;
+  }
+
+  /** Longest dictionary match over a Han run, single characters as the fallback. @param {string} run @param {Segment[]} out */
+  function matchRun(run, out) {
+    if (!dict) return;
+    const cps = [...run];
+    let i = 0;
+    while (i < cps.length) {
+      let hit = null;
+      for (let len = Math.min(MAX_WORD, cps.length - i); len >= 2; len--) {
+        const w = cps.slice(i, i + len).join('');
+        const r = dict.words[w];
+        if (r) { hit = { w, syl: r.split(' '), len }; break; }
+      }
+      if (hit) {
+        out.push({ text: hit.w, syl: hit.syl, word: true });
+        i += hit.len;
+      } else {
+        const c = cps[i];
+        const rs = dict.chars[c];
+        out.push({ text: c, syl: rs && rs.length ? [rs[0]] : null, word: false });
+        i++;
+      }
+    }
+  }
+
+  /**
+   * @param {string} text
+   * @returns {Segment[] | null} null when the dictionary is not loaded
+   */
+  function annotate(text) {
+    if (!dict) return null;
+    const hit = cache.get(text);
+    if (hit) return hit;
+    /** @type {Segment[]} */
+    const out = [];
+    const chunks = segmenter ? [...segmenter.segment(text)].map((s) => s.segment) : [text];
+    for (const chunk of chunks) {
+      for (const run of runs(chunk)) {
+        if (!run.han) { out.push({ text: run.text, syl: null, word: false }); continue; }
+        const r = dict.words[run.text];
+        if (r && [...run.text].length >= 2) out.push({ text: run.text, syl: r.split(' '), word: true });
+        else matchRun(run.text, out);
+      }
+    }
+    // merge adjacent plain runs so the DOM stays small
+    /** @type {Segment[]} */
+    const merged = [];
+    for (const s of out) {
+      const last = merged[merged.length - 1];
+      if (last && !last.syl && !s.syl) last.text += s.text; else merged.push(s);
+    }
+    if (cache.size > 500) cache.clear();
+    cache.set(text, merged);
+    return merged;
+  }
+
+  /** Flat "字(zì) 字(zì)" form for logs and the console helper. @param {string} text */
+  function describe(text) {
+    const segs = annotate(text);
+    if (!segs) return '(dictionary not loaded)';
+    return segs.map((s) => (s.syl ? [...s.text].map((c, i) => `${c}(${s.syl ? s.syl[i] ?? '?' : ''})`).join('') : s.text)).join('');
+  }
+
+  return { use, load, isReady, annotate, describe, get size() { return dict ? { words: Object.keys(dict.words).length, chars: Object.keys(dict.chars).length } : null; } };
 })();
 
 // ===== src/picker.js =====
@@ -1208,7 +1369,7 @@ var MC_PICKER = (() => {
   const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
 
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onPinyin: (on: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1221,8 +1382,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}}} */
-    let state = { langs: [null, null], enabled: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false } };
+    /** @type {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}}} */
+    let state = { langs: [null, null], enabled: true, pinyin: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1265,7 +1426,7 @@ var MC_PICKER = (() => {
       renderPanel();
     }
 
-    /** @param {{langs?: Array<string | null>, enabled?: boolean, resolved?: Array<string | null>, style?: any}} st */
+    /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, resolved?: Array<string | null>, style?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
@@ -1393,6 +1554,15 @@ var MC_PICKER = (() => {
       slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
       slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
       slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
+      const py = document.createElement('label');
+      py.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const pyc = document.createElement('input');
+      pyc.type = 'checkbox'; pyc.checked = state.pinyin; pyc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      pyc.addEventListener('change', () => handlers.onPinyin(pyc.checked));
+      py.appendChild(pyc);
+      py.appendChild(el('Pinyin over Simplified Chinese', 'flex:1;'));
+      panel.appendChild(py);
+
       const bd = document.createElement('label');
       bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
       const bdc = document.createElement('input');
@@ -1679,13 +1849,15 @@ var MC_PICKER = (() => {
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+    onPinyin(pinyin) { MC_SETTINGS.save({ pinyin }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style }); overlay.setStyle(st.style); return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style }); overlay.setStyle(st.style); return st; });
   let lastLangsKey = '';
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style });
+    picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style });
     overlay.setStyle(st.style);
+    if (session) { session.lastKey = ''; ensurePinyin(session); }
     mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled} style=${JSON.stringify(st.style)}`, { quiet: true });
     const key = st.langs.join('|');
     if (key !== lastLangsKey && session) startSession(session.movieId, 'slots changed', true);
@@ -1697,7 +1869,7 @@ var MC_PICKER = (() => {
   const cueCache = new Map();
 
   /** @typedef {{begin: number, end: number, text: string, settings: string, norm?: string}} Cue */
-  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}}} Line */
+  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}, hans: boolean}} Line */
   /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
   /** @type {Session | null} */
   let session = null;
@@ -1733,6 +1905,7 @@ var MC_PICKER = (() => {
       return;
     }
     mark('session:ready', lines.map((l, i) => (l ? `slot${i}=${l.pick.lang} "${l.pick.name}" ${l.cues.length} cues` : `slot${i}=off`)).join('; '));
+    ensurePinyin(s);
     if (video) overlay.attach(video, SLOTS);
     applyNativeVisibility();
     s.raf = requestAnimationFrame(frame);
@@ -1770,7 +1943,22 @@ var MC_PICKER = (() => {
       cueCache.set(key, cues);
       if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
     }
-    return { pick, cues, cursor: { i: 0 } };
+    return { pick, cues, cursor: { i: 0 }, hans: /^zh(-hans)?$/i.test(String(pick.lang)) };
+  }
+
+  // ---- pinyin: load the dictionary when a Simplified line wants it -----------------------
+  const PINYIN_URL = chrome.runtime.getURL('data/pinyin.json');
+  let pinyinWarned = false;
+  /** @param {Session} s */
+  function ensurePinyin(s) {
+    if (!MC_SETTINGS.get().pinyin || MC_PINYIN.isReady() || !s.lines.some((l) => l && l.hans)) return;
+    MC_PINYIN.load(PINYIN_URL).then(() => {
+      const sz = MC_PINYIN.size;
+      mark('pinyin:ready', `dictionary loaded: ${sz ? `${sz.words} words, ${sz.chars} chars` : '?'}`);
+      if (session) session.lastKey = '';
+    }).catch((err) => {
+      if (!pinyinWarned) { pinyinWarned = true; U.warn('pinyin dictionary failed to load (is data/pinyin.json web-accessible in manifest.json?):', err); }
+    });
   }
 
   /** @param {string} why */
@@ -1794,11 +1982,13 @@ var MC_PICKER = (() => {
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
     const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled || pauseAdPresent;
     const texts = s.lines.map((l) => (hidden || !l ? '' : MC_SUBS.activeCues(l.cues, c.t, l.cursor).map((x) => x.text).join('\n')));
-    const key = JSON.stringify(texts) + (hidden ? '|hidden' : '');
+    const pinyin = MC_SETTINGS.get().pinyin && MC_PINYIN.isReady();
+    const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
     s.cueChanges++;
-    overlay.render(texts, !hidden);
+    const annos = s.lines.map((l, i) => (pinyin && l && l.hans && texts[i] ? MC_PINYIN.annotate(texts[i]) : null));
+    overlay.render(texts, !hidden, annos);
     if (texts.some(Boolean)) mark('cue', `content=${c.t.toFixed(3)} ${texts.map((t) => JSON.stringify(t.slice(0, 40))).join(' / ')}`, { quiet: true });
   }
 
@@ -1912,15 +2102,17 @@ var MC_PICKER = (() => {
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{langs?: Array<string | null>, enabled?: boolean, style?: any}} */
+    /** @type {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: any}} */
     const clean = {};
     if (Array.isArray(patch.langs)) clean.langs = patch.langs;
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    if (typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });
   bridge.handle('sync', () => clock.status());
+  bridge.handle('pinyin', (/** @type {string} */ text) => (MC_PINYIN.isReady() ? MC_PINYIN.describe(String(text)) : '(dictionary not loaded)'));
 
   // ---- boot --------------------------------------------------------------------------
 

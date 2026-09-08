@@ -4,13 +4,22 @@ Dual-language (English + Chinese) subtitles on Netflix, for one person, loaded
 unpacked. Built to survive an **ad-supported plan** with server-side-stitched
 ads, which shift `video.currentTime` away from subtitle time.
 
-**Status: Phase 2 — dual lines with an in-player picker.** English over Chinese
-by default, rendered from the player's own content clock, blanked during ads,
-rebuilt on every episode change, with a picker (pill in the top-right while the
-controls show, or `Ctrl+Shift+M`) that persists the two slots across titles.
-`Ctrl+Shift+H` hides/shows the overlay. Verified live on the ads plan 2026-09-07
-(see `docs/phase0-findings.md`). Next: Phase 3 hardening (native-cue calibration
-as the fallback clock) and Phase 4 styling controls.
+**Status: Phases 0–4 done, pinyin ruby added.** English over Simplified
+Chinese by default, rendered from the player's own content clock (with
+native-cue calibration as the fallback clock and the DOM ad badge as the
+fallback ad flag), blanked during ads, rebuilt on every episode change. The
+picker (pill in the top-right while the controls show, or `Ctrl+Shift+M`)
+persists the two slots, size/height/per-line/backdrop styling, and the pinyin
+toggle across titles. `Ctrl+Shift+H` hides/shows the overlay. Verified live on
+the ads plan 2026-09-07 (see `docs/phase0-findings.md`).
+
+**Pinyin.** The Simplified line gets per-character ruby with tone marks, from
+`data/pinyin.json`: 80k words/phrases and 5.1k characters built by
+`npm run build:pinyin` from the DuiDuiDui records corpus (word readings are
+cross-validated against the sentences that contain them; `data/pinyin-suspects.txt`
+lists corpus records that disagree). Segmentation is `Intl.Segmenter` word
+boundaries, then longest dictionary match, then single characters in sense
+order. Traditional lines are not annotated.
 
 ## Layout
 
@@ -26,7 +35,9 @@ as the fallback clock) and Phase 4 styling controls.
 | `src/clock.js` | isolated | Content time + in-ad flag from the player (via the bridge), `video.currentTime` as a warned fallback. |
 | `src/overlay.js` | isolated | The subtitle layer: mounted next to `<video>`, CSSOM-styled, sized from the picture box. |
 | `src/settings.js` | isolated | Two language slots + enabled flag in `chrome.storage.local`. |
-| `src/picker.js` | isolated | The pill and the track panel, mounted inside the player view (survives fullscreen). |
+| `src/pinyin.js` | isolated | Dictionary loader and annotator (word → syllables per character). |
+| `src/picker.js` | isolated | The pill and the track/style panel, mounted inside the player view (survives fullscreen). |
+| `tools/build-pinyin.js` | | Builds `data/pinyin.json` from the DuiDuiDui records directory. |
 | `src/content.js` | isolated | Session per manifest (resolve slots → fetch → parse → render on rAF), picker wiring, shortcuts, plus the Phase 0 instrumentation: `<video>` events, `data-uia` diffs, ad text, native cues, URL changes. |
 
 Chrome injects a file listed in two `content_scripts` entries only once per

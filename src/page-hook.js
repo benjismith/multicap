@@ -400,6 +400,7 @@
         '  __multicap.sync()       native-cue vs parsed-cue timing agreement (Layer C measurement)',
         '  __multicap.settings()   persisted preferences; __multicap.setLangs([\'en\', \'zh-Hant\']) to change slots',
         '  __multicap.setStyle({scale:1.2, bottom:10, slotScale:[1,1.2], backdrop:true})  overlay styling',
+        '  __multicap.pinyin(\'你好世界\')  how a line would be annotated (needs the dictionary loaded)',
         '  keyboard: Ctrl+Shift+M track picker, Ctrl+Shift+H hide/show',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
@@ -439,6 +440,8 @@
     setLangs: (langs) => bridge.call('settings-set', { langs }),
     /** @param {{scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}} style */
     setStyle: (style) => bridge.call('settings-set', { style }),
+    /** @param {string} text */
+    pinyin: (text) => bridge.call('pinyin', text),
     manifests: manifestSummaries,
     requests: () => state.requests,
     probe: () => probe(true),

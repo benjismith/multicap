@@ -255,13 +255,15 @@
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+    onPinyin(pinyin) { MC_SETTINGS.save({ pinyin }); },
     onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style }); overlay.setStyle(st.style); return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style }); overlay.setStyle(st.style); return st; });
   let lastLangsKey = '';
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style });
+    picker.setState({ langs: st.langs, enabled: st.enabled, pinyin: st.pinyin, style: st.style });
     overlay.setStyle(st.style);
+    if (session) { session.lastKey = ''; ensurePinyin(session); }
     mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled} style=${JSON.stringify(st.style)}`, { quiet: true });
     const key = st.langs.join('|');
     if (key !== lastLangsKey && session) startSession(session.movieId, 'slots changed', true);
@@ -273,7 +275,7 @@
   const cueCache = new Map();
 
   /** @typedef {{begin: number, end: number, text: string, settings: string, norm?: string}} Cue */
-  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}}} Line */
+  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}, hans: boolean}} Line */
   /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
   /** @type {Session | null} */
   let session = null;
@@ -309,6 +311,7 @@
       return;
     }
     mark('session:ready', lines.map((l, i) => (l ? `slot${i}=${l.pick.lang} "${l.pick.name}" ${l.cues.length} cues` : `slot${i}=off`)).join('; '));
+    ensurePinyin(s);
     if (video) overlay.attach(video, SLOTS);
     applyNativeVisibility();
     s.raf = requestAnimationFrame(frame);
@@ -346,7 +349,22 @@
       cueCache.set(key, cues);
       if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
     }
-    return { pick, cues, cursor: { i: 0 } };
+    return { pick, cues, cursor: { i: 0 }, hans: /^zh(-hans)?$/i.test(String(pick.lang)) };
+  }
+
+  // ---- pinyin: load the dictionary when a Simplified line wants it -----------------------
+  const PINYIN_URL = chrome.runtime.getURL('data/pinyin.json');
+  let pinyinWarned = false;
+  /** @param {Session} s */
+  function ensurePinyin(s) {
+    if (!MC_SETTINGS.get().pinyin || MC_PINYIN.isReady() || !s.lines.some((l) => l && l.hans)) return;
+    MC_PINYIN.load(PINYIN_URL).then(() => {
+      const sz = MC_PINYIN.size;
+      mark('pinyin:ready', `dictionary loaded: ${sz ? `${sz.words} words, ${sz.chars} chars` : '?'}`);
+      if (session) session.lastKey = '';
+    }).catch((err) => {
+      if (!pinyinWarned) { pinyinWarned = true; U.warn('pinyin dictionary failed to load (is data/pinyin.json web-accessible in manifest.json?):', err); }
+    });
   }
 
   /** @param {string} why */
@@ -370,11 +388,13 @@
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
     const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled || pauseAdPresent;
     const texts = s.lines.map((l) => (hidden || !l ? '' : MC_SUBS.activeCues(l.cues, c.t, l.cursor).map((x) => x.text).join('\n')));
-    const key = JSON.stringify(texts) + (hidden ? '|hidden' : '');
+    const pinyin = MC_SETTINGS.get().pinyin && MC_PINYIN.isReady();
+    const key = JSON.stringify(texts) + (hidden ? '|hidden' : '') + (pinyin ? '|py' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
     s.cueChanges++;
-    overlay.render(texts, !hidden);
+    const annos = s.lines.map((l, i) => (pinyin && l && l.hans && texts[i] ? MC_PINYIN.annotate(texts[i]) : null));
+    overlay.render(texts, !hidden, annos);
     if (texts.some(Boolean)) mark('cue', `content=${c.t.toFixed(3)} ${texts.map((t) => JSON.stringify(t.slice(0, 40))).join(' / ')}`, { quiet: true });
   }
 
@@ -488,15 +508,17 @@
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{langs?: Array<string | null>, enabled?: boolean, style?: any}} */
+    /** @type {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: any}} */
     const clean = {};
     if (Array.isArray(patch.langs)) clean.langs = patch.langs;
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    if (typeof patch.pinyin === 'boolean') clean.pinyin = patch.pinyin;
     if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });
   bridge.handle('sync', () => clock.status());
+  bridge.handle('pinyin', (/** @type {string} */ text) => (MC_PINYIN.isReady() ? MC_PINYIN.describe(String(text)) : '(dictionary not loaded)'));
 
   // ---- boot --------------------------------------------------------------------------
 

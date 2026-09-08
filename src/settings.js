@@ -12,14 +12,14 @@ var MC_SETTINGS = (() => {
    * scale: overall font size multiplier; bottom: distance from the picture's bottom edge in %;
    * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
    */
-  /** @typedef {{langs: Array<string | null>, enabled: boolean, style: Style}} Settings */
+  /** @typedef {{langs: Array<string | null>, enabled: boolean, pinyin: boolean, style: Style}} Settings */
   const KEY = 'multicap';
   /** @type {Style} */
   const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
   /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
   const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
-  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, style: DEFAULT_STYLE };
+  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, pinyin: true, style: DEFAULT_STYLE };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -43,6 +43,7 @@ var MC_SETTINGS = (() => {
     if (!Array.isArray(s.langs)) s.langs = DEFAULTS.langs.slice();
     s.langs = [0, 1].map((i) => (typeof s.langs[i] === 'string' && s.langs[i] ? s.langs[i] : null));
     s.enabled = s.enabled !== false;
+    s.pinyin = s.pinyin !== false;
     const st = { ...DEFAULT_STYLE, ...(s.style && typeof s.style === 'object' ? s.style : {}) };
     const clamp = (/** @type {any} */ v, /** @type {number[]} */ r, /** @type {number} */ d) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(r[1], Math.max(r[0], v)) : d);
     st.scale = clamp(st.scale, RANGES.scale, DEFAULT_STYLE.scale);
@@ -53,7 +54,7 @@ var MC_SETTINGS = (() => {
     return s;
   }
 
-  /** @param {{langs?: Array<string | null>, enabled?: boolean, style?: Partial<Style>}} patch @returns {Promise<Settings>} */
+  /** @param {{langs?: Array<string | null>, enabled?: boolean, pinyin?: boolean, style?: Partial<Style>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
     const cur = cache || DEFAULTS;
     cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) } });
