@@ -137,3 +137,26 @@ liveAdsCapability ("dynamic"), uiContext.adCanvasUICapabilities
   pre-roll when the page is loaded cold on `/watch/…` (observed only via the SPA
   path and a resumed episode).
 - Behaviour when the tab is backgrounded through a break.
+
+## Phase 1 verification (2026-09-07, same session)
+
+Single English track rendered from `getSegmentTime()`; native layer kept at
+`opacity: 0` (it kept updating: 420+ cue changes observed). Observed:
+
+- Cold load of `/watch/81678254`: manifest captured from the player graph ~7 s
+  in (`player:path`), 725 cues parsed, overlay mounted in the picture box.
+- **Timing:** native cue text matched against parsed cues after a mid-roll gave
+  22/22 matches, median delta −0.105 s (min −0.238, max +0.158): Netflix paints
+  its cue about a tenth of a second before the WebVTT start time on the
+  player's clock. Small and consistent; a −0.1 s lead can be applied later.
+- **Ads:** seeking into the first mid-roll set `adPresenting`, the overlay went
+  `visibility: hidden` while the content clock sat at the break, and it came
+  back in sync with media time 32 s ahead of content afterwards.
+- **Episode change** via Netflix's next control: old session stopped and the
+  new one (824 cues) started 0.6 s after the new `<video>` appeared; the
+  pre-roll played blank; exactly one overlay in the DOM.
+- **Pause:** the pause screen appeared without a pause ad this time; the
+  `[data-uia^="pause-ad"]` rule remains untested.
+- One Netflix load stalled on the spinner for ~45 s with no console errors from
+  either world and no manifest; a page reload fixed it. Not attributed to the
+  extension (nothing new runs before a manifest exists), but worth watching.

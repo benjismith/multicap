@@ -4,9 +4,11 @@ Dual-language (English + Chinese) subtitles on Netflix, for one person, loaded
 unpacked. Built to survive an **ad-supported plan** with server-side-stitched
 ads, which shift `video.currentTime` away from subtitle time.
 
-**Status: Phase 0 — instrumentation only.** Nothing is rendered yet. This build
-captures the playback manifest and logs everything ad- and timing-related so
-the ad schema can be *discovered* rather than guessed.
+**Status: Phase 1 — single-track overlay, ad-correct.** The English track is
+rendered over the video from the player's own content clock, blanked during
+ads, and rebuilt on every episode change. Verified live on the ads plan
+2026-09-07 (see `docs/phase0-findings.md`, "Phase 1 verification"). Next:
+Phase 2, the second (Chinese) line and a track picker.
 
 ## Layout
 
@@ -18,7 +20,10 @@ the ad schema can be *discovered* rather than guessed.
 | `src/util.js` | both | Logging, ring buffers, object-shape dumps. Captures pristine `JSON.*` before the hooks go in. |
 | `src/bridge.js` | both | Synchronous MAIN ⇄ isolated-world messaging over `CustomEvent`s with JSON-string payloads. |
 | `src/page-hook.js` | MAIN | `JSON.parse` hook (capture manifest), `JSON.stringify` hook (ask for WebVTT + all tracks), player-API probe, `__multicap` console helpers. |
-| `src/content.js` | isolated | Watches `<video>`, the player DOM (`data-uia` diffs, ad-word text), the native subtitle layer, and the URL; stamps everything with media time. |
+| `src/subtitles.js` | isolated | WebVTT parser for Netflix's files, cursor-based active-cue lookup, text normalization for cue matching. |
+| `src/clock.js` | isolated | Content time + in-ad flag from the player (via the bridge), `video.currentTime` as a warned fallback. |
+| `src/overlay.js` | isolated | The subtitle layer: mounted next to `<video>`, CSSOM-styled, sized from the picture box. |
+| `src/content.js` | isolated | Session per manifest (pick track → fetch → parse → render on rAF), plus the Phase 0 instrumentation: `<video>` events, `data-uia` diffs, ad text, native cues, URL changes. |
 
 Chrome injects a file listed in two `content_scripts` entries only once per
 frame (de-duplicated by path, ignoring the world), so shared files cannot be
