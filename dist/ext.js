@@ -2044,8 +2044,8 @@ var MC_PICKER = (() => {
         let extra = '';
         if (ev === 'durationchange' || ev === 'loadedmetadata') extra = '  ' + durationVsManifest(v);
         else if (ev === 'seeking') { extra = `  from=${U.fmtSec(lastSeenTime)} to=${U.fmtSec(v.currentTime)}`; clock.onSeek(); if (session) session.lastShown = null; assist.reset(); }
-        else if (ev === 'pause') assist.onVideoPause();
-        else if (ev === 'play') assist.onVideoPlay();
+        else if (ev === 'pause') { assist.onVideoPause(); if (!assist.holding) endResumeGrace(); }
+        else if (ev === 'play') { assist.onVideoPlay(); }
         else if (ev === 'seeked') extra = '  ' + clockLine();
         mark('video:' + ev, videoDesc(v) + extra);
       });
@@ -2233,8 +2233,23 @@ var MC_PICKER = (() => {
     setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
     getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
     sample: () => assistFrame(),
-    indicate: (st) => { overlay.setIndicator(st); setHoldingUi(!!st.holding); },
+    indicate: (st) => { overlay.setIndicator(st); if (st.holding) setHoldingUi(true); else if (holdingUi) startResumeGrace(); },
   }, (msg) => mark('assist', msg));
+
+  /** Netflix also flashes its control bar on resume; keep it hidden that long after our own resumes. */
+  const RESUME_GRACE_MS = 3500;
+  let graceHandle = 0;
+  function startResumeGrace() {
+    clearTimeout(graceHandle);
+    graceHandle = window.setTimeout(() => { graceHandle = 0; setHoldingUi(false); }, RESUME_GRACE_MS);
+  }
+  function endResumeGrace() {
+    if (!graceHandle) return;
+    clearTimeout(graceHandle);
+    graceHandle = 0;
+    if (!assist.holding) setHoldingUi(false);
+  }
+  document.addEventListener('pointermove', endResumeGrace, { capture: true, passive: true });
 
   /**
    * While the assist holds a caption, Netflix's control bar (which it shows on every pause)
