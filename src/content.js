@@ -11,6 +11,10 @@
  * Nothing here renders anything yet.
  */
 (() => {
+  if (typeof MC_UTIL === 'undefined' || typeof MC_NFLX === 'undefined' || typeof MC_BRIDGE === 'undefined') {
+    console.error('[multicap] shared modules (netflix.js / util.js / bridge.js) did not load before content.js — check the js order in manifest.json', 'content.js');
+    return;
+  }
   const U = MC_UTIL;
   const N = MC_NFLX;
   const bridge = MC_BRIDGE.create('ext');

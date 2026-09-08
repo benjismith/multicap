@@ -11,7 +11,9 @@
  * Nothing here should throw. Callers treat null / [] as "assumption failed"
  * and log loudly.
  */
-const MC_NFLX = (() => {
+// `var` on purpose: it becomes a property of the world's global object, which is what
+// later files in the same content-script `js` list can see (top-level const is not shared).
+var MC_NFLX = (() => {
   /** Subtitle profile that makes Netflix serve WebVTT instead of TTML/DFXP. */
   const WEBVTT_PROFILE = 'webvtt-lssdh-ios8';
 

@@ -12,6 +12,10 @@
  * Everything Netflix-specific comes from netflix.js. This file only wires it up.
  */
 (() => {
+  if (typeof MC_UTIL === 'undefined' || typeof MC_NFLX === 'undefined' || typeof MC_BRIDGE === 'undefined') {
+    console.error('[multicap] shared modules (netflix.js / util.js / bridge.js) did not load before page-hook.js — check the js order in manifest.json', 'page-hook.js');
+    return;
+  }
   const U = MC_UTIL;
   const N = MC_NFLX;
   const bridge = MC_BRIDGE.create('page');
