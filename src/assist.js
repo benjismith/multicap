@@ -23,7 +23,7 @@ var MC_ASSIST = (() => {
   /** @typedef {{t: number, wall: number, paused: boolean, inAd: boolean, zh: string, end: number}} Frame */
 
   /**
-   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number, sample?: () => Frame | null}} actions
+   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number, sample?: () => Frame | null, indicate?: (st: {holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}) => void}} actions
    *   `sample` returns a fresh frame on demand; the render loop can run at a few frames per
    *   second (observed ~10 fps), so the moment to act is scheduled with a timer as well.
    * @param {(msg: string) => void} log
@@ -43,6 +43,8 @@ var MC_ASSIST = (() => {
     let frameGapMs = 0;
     /** @param {string} ev @param {Record<string, any>} [x] */
     const tr = (ev, x = {}) => trace.push({ ev, at: +(performance.now() / 1000).toFixed(1), ...x });
+    /** Tell the overlay what we are doing. @param {{holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}} st */
+    const indicate = (st) => { if (actions.indicate) { try { actions.indicate(st); } catch { /* overlay gone */ } } };
 
     /** @param {Partial<Config>} c */
     function configure(c) {
@@ -57,6 +59,7 @@ var MC_ASSIST = (() => {
       if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* player gone */ } }
       if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
       if (cap.actHandle) clearTimeout(cap.actHandle);
+      if (cap.slowed != null || cap.pausedByUs) indicate({ holding: false, rate: null });
       cap = null;
       lastFrame = null;
     }
@@ -85,7 +88,7 @@ var MC_ASSIST = (() => {
       c.acted = true;
       if (c.actHandle) { clearTimeout(c.actHandle); c.actHandle = 0; }
       tr('act', { t: +f.t.toFixed(3), elapsed: +((f.wall - c.startWall) / 1000).toFixed(2), required: c.required });
-      if (c.slowed != null) { actions.setRate(c.baseRate); c.slowed = null; }
+      if (c.slowed != null) { actions.setRate(c.baseRate); c.slowed = null; indicate({ holding: false, rate: null }); }
       const elapsed = (f.wall - c.startWall) / 1000;
       const needed = c.required - elapsed;
       if (needed < MIN_PAUSE_S || cfg.mode === 'slow') return;
@@ -93,6 +96,7 @@ var MC_ASSIST = (() => {
       expectingPause = true;
       stats.paused++;
       actions.pause();
+      indicate({ holding: true, ms: needed * 1000, autoResume: cfg.autoResume });
       log(`assist: paused ${needed.toFixed(1)}s for ${c.chars} chars "${f.zh.slice(0, 24)}"`);
       if (cfg.autoResume) c.resumeHandle = window.setTimeout(() => resume('reading time met'), needed * 1000);
     }
@@ -127,6 +131,7 @@ var MC_ASSIST = (() => {
               actions.setRate(Math.round(rate * 100) / 100);
               cap.slowed = rate;
               stats.slowed++;
+              indicate({ holding: false, rate: Math.round(rate * 100) / 100 });
             }
           }
         }
@@ -145,6 +150,7 @@ var MC_ASSIST = (() => {
       cap.pausedByUs = false;
       cap.resumeHandle = 0;
       stats.resumed++;
+      indicate({ holding: false, rate: null });
       tr('resume', { why });
       log(`assist: resumed (${why})`);
       actions.play();
@@ -161,6 +167,7 @@ var MC_ASSIST = (() => {
         cap.pausedByUs = false;
         cap.acted = true;
         stats.cancelled++;
+        indicate({ holding: false, rate: null });
       }
     }
 
@@ -172,6 +179,7 @@ var MC_ASSIST = (() => {
         cap.pausedByUs = false;
         cap.resumeHandle = 0;
         stats.cancelled++;
+        indicate({ holding: false, rate: null });
       }
     }
 

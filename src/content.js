@@ -275,6 +275,7 @@
     setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
     getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
     sample: () => assistFrame(),
+    indicate: (st) => overlay.setIndicator(st),
   }, (msg) => mark('assist', msg));
 
   /**

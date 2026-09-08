@@ -1051,6 +1051,9 @@ var MC_OVERLAY = (() => {
   const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
   const WORD_CSS = 'display:inline-block;margin:0 0.12em;white-space:nowrap;';
   const RUBY_CSS = 'ruby-align:center;';
+  const CHIP_CSS = 'display:none;align-items:center;gap:0.5em;margin-top:0.35em;padding:0.18em 0.7em;border-radius:999px;background:rgba(0,0,0,.55);color:rgba(255,255,255,.85);font-size:0.42em;font-weight:600;letter-spacing:.04em;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:none;backdrop-filter:blur(4px);';
+  const TRACK_CSS = 'display:none;width:9em;height:0.32em;border-radius:999px;background:rgba(255,255,255,.22);overflow:hidden;';
+  const FILL_CSS = 'height:100%;width:100%;border-radius:999px;background:rgba(255,255,255,.9);transition:none;';
   const RT_CSS = 'font-size:0.42em;line-height:1.1;font-weight:400;letter-spacing:0;color:rgba(255,255,255,.9);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:0 0 4px rgba(0,0,0,.9),0 0 2px #000;';
 
   function create() {
@@ -1058,6 +1061,8 @@ var MC_OVERLAY = (() => {
     let root = null;
     /** @type {HTMLDivElement[]} */
     let lines = [];
+    /** @type {{chip: HTMLDivElement, label: HTMLSpanElement, track: HTMLDivElement, fill: HTMLDivElement} | null} */
+    let chip = null;
     /** @type {HTMLElement | null} */
     let host = null;
     /** @type {ResizeObserver | null} */
@@ -1113,6 +1118,19 @@ var MC_OVERLAY = (() => {
         root.appendChild(el);
         lines.push(el);
       }
+      const c = document.createElement('div');
+      c.className = 'multicap-chip';
+      c.style.cssText = CHIP_CSS;
+      const label = document.createElement('span');
+      const track = document.createElement('div');
+      track.style.cssText = TRACK_CSS;
+      const fill = document.createElement('div');
+      fill.style.cssText = FILL_CSS;
+      track.appendChild(fill);
+      c.appendChild(label);
+      c.appendChild(track);
+      root.appendChild(c);
+      chip = { chip: c, label, track, fill };
       host.appendChild(root);
       ro = new ResizeObserver(fit);
       ro.observe(host);
@@ -1134,7 +1152,44 @@ var MC_OVERLAY = (() => {
       root = null;
       host = null;
       lines = [];
+      chip = null;
       lastTexts = [];
+    }
+
+    /**
+     * What the reading assist is doing right now, shown as a chip under the lines:
+     * holding with a bar that drains over `ms` (auto-resume), holding without a bar
+     * (manual resume), or playing slowed at `rate`. Anything else hides the chip.
+     * @param {{holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}} st
+     */
+    function setIndicator(st) {
+      if (!chip) return;
+      const { chip: c, label, track, fill } = chip;
+      if (st.holding) {
+        label.textContent = st.autoResume ? '❚❚ reading' : '❚❚ paused for reading · Space to continue';
+        c.style.display = 'inline-flex';
+        if (st.autoResume && st.ms && st.ms > 0) {
+          track.style.display = 'block';
+          fill.style.transition = 'none';
+          fill.style.width = '100%';
+          void fill.offsetWidth; // commit the full width before animating
+          fill.style.transition = `width ${Math.round(st.ms)}ms linear`;
+          fill.style.width = '0%';
+        } else {
+          track.style.display = 'none';
+        }
+        return;
+      }
+      if (st.rate != null && st.rate < 0.995) {
+        label.textContent = `▶ ${st.rate.toFixed(2)}×`;
+        track.style.display = 'none';
+        c.style.display = 'inline-flex';
+        return;
+      }
+      c.style.display = 'none';
+      track.style.display = 'none';
+      fill.style.transition = 'none';
+      fill.style.width = '100%';
     }
 
     /**
@@ -1185,7 +1240,7 @@ var MC_OVERLAY = (() => {
       }
     }
 
-    return { attach, detach, render, setRaised, setStyle, get mounted() { return !!(root && root.isConnected); } };
+    return { attach, detach, render, setRaised, setStyle, setIndicator, get mounted() { return !!(root && root.isConnected); } };
   }
   return { create };
 })();
@@ -1435,7 +1490,7 @@ var MC_ASSIST = (() => {
   /** @typedef {{t: number, wall: number, paused: boolean, inAd: boolean, zh: string, end: number}} Frame */
 
   /**
-   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number, sample?: () => Frame | null}} actions
+   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number, sample?: () => Frame | null, indicate?: (st: {holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}) => void}} actions
    *   `sample` returns a fresh frame on demand; the render loop can run at a few frames per
    *   second (observed ~10 fps), so the moment to act is scheduled with a timer as well.
    * @param {(msg: string) => void} log
@@ -1455,6 +1510,8 @@ var MC_ASSIST = (() => {
     let frameGapMs = 0;
     /** @param {string} ev @param {Record<string, any>} [x] */
     const tr = (ev, x = {}) => trace.push({ ev, at: +(performance.now() / 1000).toFixed(1), ...x });
+    /** Tell the overlay what we are doing. @param {{holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}} st */
+    const indicate = (st) => { if (actions.indicate) { try { actions.indicate(st); } catch { /* overlay gone */ } } };
 
     /** @param {Partial<Config>} c */
     function configure(c) {
@@ -1469,6 +1526,7 @@ var MC_ASSIST = (() => {
       if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* player gone */ } }
       if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
       if (cap.actHandle) clearTimeout(cap.actHandle);
+      if (cap.slowed != null || cap.pausedByUs) indicate({ holding: false, rate: null });
       cap = null;
       lastFrame = null;
     }
@@ -1497,7 +1555,7 @@ var MC_ASSIST = (() => {
       c.acted = true;
       if (c.actHandle) { clearTimeout(c.actHandle); c.actHandle = 0; }
       tr('act', { t: +f.t.toFixed(3), elapsed: +((f.wall - c.startWall) / 1000).toFixed(2), required: c.required });
-      if (c.slowed != null) { actions.setRate(c.baseRate); c.slowed = null; }
+      if (c.slowed != null) { actions.setRate(c.baseRate); c.slowed = null; indicate({ holding: false, rate: null }); }
       const elapsed = (f.wall - c.startWall) / 1000;
       const needed = c.required - elapsed;
       if (needed < MIN_PAUSE_S || cfg.mode === 'slow') return;
@@ -1505,6 +1563,7 @@ var MC_ASSIST = (() => {
       expectingPause = true;
       stats.paused++;
       actions.pause();
+      indicate({ holding: true, ms: needed * 1000, autoResume: cfg.autoResume });
       log(`assist: paused ${needed.toFixed(1)}s for ${c.chars} chars "${f.zh.slice(0, 24)}"`);
       if (cfg.autoResume) c.resumeHandle = window.setTimeout(() => resume('reading time met'), needed * 1000);
     }
@@ -1539,6 +1598,7 @@ var MC_ASSIST = (() => {
               actions.setRate(Math.round(rate * 100) / 100);
               cap.slowed = rate;
               stats.slowed++;
+              indicate({ holding: false, rate: Math.round(rate * 100) / 100 });
             }
           }
         }
@@ -1557,6 +1617,7 @@ var MC_ASSIST = (() => {
       cap.pausedByUs = false;
       cap.resumeHandle = 0;
       stats.resumed++;
+      indicate({ holding: false, rate: null });
       tr('resume', { why });
       log(`assist: resumed (${why})`);
       actions.play();
@@ -1573,6 +1634,7 @@ var MC_ASSIST = (() => {
         cap.pausedByUs = false;
         cap.acted = true;
         stats.cancelled++;
+        indicate({ holding: false, rate: null });
       }
     }
 
@@ -1584,6 +1646,7 @@ var MC_ASSIST = (() => {
         cap.pausedByUs = false;
         cap.resumeHandle = 0;
         stats.cancelled++;
+        indicate({ holding: false, rate: null });
       }
     }
 
@@ -2170,6 +2233,7 @@ var MC_PICKER = (() => {
     setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
     getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
     sample: () => assistFrame(),
+    indicate: (st) => overlay.setIndicator(st),
   }, (msg) => mark('assist', msg));
 
   /**
