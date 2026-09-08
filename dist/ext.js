@@ -1045,7 +1045,8 @@ var MC_OVERLAY = (() => {
   const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
   // z-index 5: above Netflix's pause card (z-index 1, same parent), below the picker pill/panel (20/21).
   const ROOT_CSS = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 5% 7%;box-sizing:border-box;z-index:5;transition:padding-bottom .25s ease;';
-  const LINE_CSS = 'color:#fff;text-align:center;white-space:pre-line;line-height:1.3;max-width:90%;margin:0.1em 0;padding:0.05em 0.4em;font-weight:500;font-family:' + FONT + ';text-shadow:0 0 6px rgba(0,0,0,.9),0 0 2px #000,1px 1px 2px #000;';
+  // The lines are the one interactive part of the overlay: selectable text with a text cursor.
+  const LINE_CSS = 'color:#fff;text-align:center;white-space:pre-line;line-height:1.3;max-width:90%;margin:0.1em 0;padding:0.05em 0.4em;font-weight:500;font-family:' + FONT + ';text-shadow:0 0 6px rgba(0,0,0,.9),0 0 2px #000,1px 1px 2px #000;pointer-events:auto;user-select:text;-webkit-user-select:text;cursor:text;';
   /** Base font size as a fraction of the picture box height, before the user's scale. */
   const BASE_SIZE_RATIO = 0.042;
   const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
@@ -1054,7 +1055,8 @@ var MC_OVERLAY = (() => {
   const CHIP_CSS = 'display:none;align-items:center;gap:0.5em;margin-top:0.35em;padding:0.18em 0.7em;border-radius:999px;background:rgba(0,0,0,.55);color:rgba(255,255,255,.85);font-size:0.42em;font-weight:600;letter-spacing:.04em;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:none;backdrop-filter:blur(4px);';
   const TRACK_CSS = 'display:none;width:9em;height:0.32em;border-radius:999px;background:rgba(255,255,255,.22);overflow:hidden;';
   const FILL_CSS = 'height:100%;width:100%;border-radius:999px;background:rgba(255,255,255,.9);transition:none;';
-  const RT_CSS = 'font-size:0.42em;line-height:1.1;font-weight:400;letter-spacing:0;color:rgba(255,255,255,.9);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:0 0 4px rgba(0,0,0,.9),0 0 2px #000;';
+  // Pinyin is excluded from selection so a copy yields the hanzi alone.
+  const RT_CSS = 'font-size:0.42em;line-height:1.1;font-weight:400;letter-spacing:0;color:rgba(255,255,255,.9);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;text-shadow:0 0 4px rgba(0,0,0,.9),0 0 2px #000;user-select:none;-webkit-user-select:none;';
 
   function create() {
     /** @type {HTMLDivElement | null} */
@@ -1115,6 +1117,8 @@ var MC_OVERLAY = (() => {
         const el = document.createElement('div');
         el.className = 'multicap-line multicap-line-' + i;
         el.style.cssText = LINE_CSS + 'display:none;';
+        // Selecting text must not reach Netflix's handlers (click = play/pause, double-click = fullscreen).
+        for (const ev of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'contextmenu']) el.addEventListener(ev, (e) => e.stopPropagation());
         root.appendChild(el);
         lines.push(el);
       }
