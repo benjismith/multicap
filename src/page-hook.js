@@ -28,7 +28,7 @@
     parseCalls: 0,
     stringifyCalls: 0,
     nearMisses: 0,
-    /** @type {Array<{at: number, href: string, movieId: any, manifest: any, info?: any}>} */
+    /** @type {Array<{at: number, href: string, movieId: any, manifest: any, source: string, info?: any}>} */
     manifests: [],
     /** @type {Array<{at: number, href: string, changes: string[], paramKeys: string[], profiles: string[], shape: string[]}>} */
     requests: [],
@@ -92,14 +92,30 @@
 
   // ---- manifest handling --------------------------------------------------------
 
-  /** @param {any} m */
-  function onManifest(m) {
-    const rec = { at: Date.now(), href: location.href, movieId: m.movieId, manifest: m };
+  /**
+   * Primary manifest source: the player object graph. Records it once per movieId.
+   * Returns a short status string for the caller's log.
+   */
+  function captureFromPlayer() {
+    const player = N.watchPlayer();
+    if (!player) return 'no watch player';
+    const hit = N.manifestFromPlayer(player);
+    if (!hit) return 'player has no manifest yet';
+    const m = hit.manifest;
+    if (state.manifests.some((r) => r.manifest === m)) return 'already captured';
+    if (hit.via !== 'path') U.warn(`manifest found by search, not at MANIFEST_PATH (${hit.via}); update src/netflix.js`);
+    onManifest(m, 'player:' + hit.via);
+    return 'captured movieId=' + m.movieId;
+  }
+
+  /** @param {any} m @param {string} [source] */
+  function onManifest(m, source = 'JSON.parse') {
+    const rec = { at: Date.now(), href: location.href, movieId: m.movieId, manifest: m, source };
     state.manifests.push(rec);
     if (state.manifests.length > 6) state.manifests.shift();
     const info = manifestInfo(rec);
-    U.group(`MANIFEST captured: movieId=${m.movieId} dur=${info.durationMs}ms tracks=${info.tracks.length} adverts=${info.advertsSummary} auxiliaryManifests=${info.auxCount}`, () => {
-      U.log('page url:', rec.href);
+    U.group(`MANIFEST captured (${source}): movieId=${m.movieId} dur=${info.durationMs}ms tracks=${info.tracks.length} adverts=${info.advertsSummary} auxiliaryManifests=${info.auxCount}`, () => {
+      U.log('page url:', rec.href, ' source:', source);
       U.log('top-level keys:', info.topKeys.join(', '));
       console.table(info.tracks);
       U.log('ttDownloadables entry keys (union across tracks):', info.downloadableKeys.join(', ') || '(none)');
@@ -151,7 +167,7 @@
 
   const manifestSummaries = () => state.manifests.map((r) => {
     const i = manifestInfo(r);
-    return { at: new Date(r.at).toISOString(), href: r.href, movieId: r.movieId, durationMs: i.durationMs, trackCount: i.tracks.length, advertsSummary: i.advertsSummary, auxCount: i.auxCount };
+    return { at: new Date(r.at).toISOString(), href: r.href, movieId: r.movieId, source: r.source, durationMs: i.durationMs, trackCount: i.tracks.length, advertsSummary: i.advertsSummary, auxCount: i.auxCount };
   });
 
   // ---- 3. player API probe ------------------------------------------------------
@@ -204,6 +220,10 @@
       if (!p) { out.api = 'unavailable'; return out; }
       out.apiCurrentTime = typeof p.getCurrentTime === 'function' ? p.getCurrentTime() : 'no getCurrentTime';
       out.apiDuration = typeof p.getDuration === 'function' ? p.getDuration() : 'no getDuration';
+      out.contentTimeMs = N.contentTimeMs(p);
+      const ad = N.adState(p);
+      out.adPresenting = ad ? ad.presenting : 'no ad manager';
+      out.adBreakIndex = ad ? ad.breakIndex : null;
       if (typeof out.apiCurrentTime === 'number' && video) {
         // Belief: the API reports milliseconds. If not, this diff will be absurd and the raw values show why.
         out.apiMinusVideoMs = Math.round(out.apiCurrentTime - video.currentTime * 1000);
@@ -260,6 +280,8 @@
 
   bridge.handle('ping', () => 'pong');
   bridge.handle('manifests', manifestSummaries);
+  bridge.handle('manifest-check', captureFromPlayer);
+  bridge.handle('ad-breaks', () => { const p = N.watchPlayer(); return p ? N.adBreaks(p) : []; });
   bridge.handle('probe', () => probe(true));
   bridge.handle('clock', () => clockSample());
 
@@ -272,7 +294,7 @@
     L.push(`hook installed: ${new Date(state.installedAt).toISOString()}  JSON.parse calls: ${state.parseCalls}  JSON.stringify calls: ${state.stringifyCalls}  near-misses: ${state.nearMisses}`);
     L.push('');
     L.push(`-- manifests captured (${state.manifests.length}) --`);
-    for (const s of manifestSummaries()) L.push(`${s.at}  movieId=${s.movieId}  dur=${s.durationMs}ms  tracks=${s.trackCount}  adverts=${s.advertsSummary}  aux=${s.auxCount}  ${s.href}`);
+    for (const s of manifestSummaries()) L.push(`${s.at}  movieId=${s.movieId}  via=${s.source}  dur=${s.durationMs}ms  tracks=${s.trackCount}  adverts=${s.advertsSummary}  aux=${s.auxCount}  ${s.href}`);
     const last = state.manifests[state.manifests.length - 1];
     if (last) {
       const i = manifestInfo(last);
@@ -341,6 +363,8 @@
         '  copy(__multicap.text()) same text → clipboard (paste this back)',
         '  __multicap.report()     full structured report (copy(__multicap.report()) → JSON)',
         '  __multicap.manifest()   last raw manifest object; .manifest(-2) for the previous one',
+        '  __multicap.capture()    read the manifest from the player object graph now',
+        '  __multicap.adBreaks()   ad breaks (content-time locations) from the ad manager',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
         '  __multicap.probe()      introspect the player API now',
@@ -365,7 +389,9 @@
       };
     },
     /** @param {number} [i] */
-    manifest(i = -1) { return state.manifests.at(i)?.manifest ?? null; },
+    manifest(i = -1) { if (!state.manifests.length) captureFromPlayer(); return state.manifests.at(i)?.manifest ?? null; },
+    capture: captureFromPlayer,
+    adBreaks() { const p = N.watchPlayer(); return p ? N.adBreaks(p) : []; },
     manifests: manifestSummaries,
     requests: () => state.requests,
     probe: () => probe(true),

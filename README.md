@@ -39,6 +39,13 @@ without building. Edit `src/`, never `dist/`.
    instrumentation active`. If the second one instead says the page hook is not
    reachable, the MAIN-world script didn't run.
 
+## Phase 0 results
+
+See [`docs/phase0-findings.md`](docs/phase0-findings.md): the ad-break schema, the
+player's content clock (`getSegmentTime()`), the three regimes of `video.currentTime`,
+verified DOM selectors, and where the manifest actually lives now that it no longer
+passes through `JSON.parse`.
+
 ## Phase 0 protocol
 
 Pick a title that has both English and a Chinese subtitle track and is long

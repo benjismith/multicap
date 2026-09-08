@@ -50,9 +50,11 @@ var MC_NFLX = (() => {
   // ---- manifest response ---------------------------------------------------
 
   /**
-   * The playback manifest arrives through JSON.parse as
+   * Subadub-lineage capture: a manifest arriving through JSON.parse as
    *   { result: { movieId, timedtexttracks, adverts?, auxiliaryManifests?, ... } }
-   * (Subadub lineage). Returns the manifest object (the `result`) or null.
+   * On the current client the manifest does NOT pass through main-thread JSON.parse
+   * (verified 2026-09-07), so this is a passive extra; manifestFromPlayer() is primary.
+   * Returns the manifest object (the `result`) or null.
    * @param {any} value
    * @returns {any | null}
    */
@@ -166,6 +168,13 @@ var MC_NFLX = (() => {
     /** Netflix's own subtitle layer (later: kept alive but invisible, observed for sync Layer C). */
     timedtext: '.player-timedtext',
     timedtextText: '.player-timedtext-text-container',
+    /** Present exactly while an ad plays ("Ad" badge + countdown). DOM fallback for isInAd(). */
+    adsInfo: '[data-uia="ads-info-container"]',
+    adsInfoTime: '[data-uia="ads-info-time"]',
+    /** Netflix "pause ads" overlay, present while playback is paused. */
+    pauseAd: '[data-uia^="pause-ad"]',
+    /** Ad-break markers inside the scrubber (only while controls are shown). */
+    adMarkers: '[data-uia="ad-markers"]',
   };
 
   /** Text that suggests ad UI ("Ad 1 of 3", "Advertisement"). Discovery heuristic only. */
@@ -174,6 +183,7 @@ var MC_NFLX = (() => {
   const AD_TOKEN_RE = /(^|[-_ ])ad(s|vert\w*|break\w*|pod\w*)?([-_ ]|$)/i;
 
   // ---- player API (MAIN world only) ------------------------------------------
+  // Everything here is undocumented and was verified 2026-09-07 (docs/phase0-findings.md).
 
   /** Undocumented: netflix.appContext.state.playerApp.getAPI().videoPlayer */
   function playerApi() {
@@ -195,6 +205,125 @@ var MC_NFLX = (() => {
     return ids.find((i) => /^watch/i.test(String(i))) ?? ids[ids.length - 1];
   }
 
+  /** The active /watch player object, or null. */
+  function watchPlayer() {
+    const vp = playerApi();
+    if (!vp || typeof vp.getAllPlayerSessionIds !== 'function' || typeof vp.getVideoPlayerBySessionId !== 'function') return null;
+    try {
+      const sid = pickWatchSession(vp.getAllPlayerSessionIds());
+      return sid == null ? null : vp.getVideoPlayerBySessionId(sid) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Where the manifest lives inside player.getInternalPlayer(). The manifest does NOT pass
+   * through main-thread JSON.parse on the current client, so this is the primary source.
+   */
+  const MANIFEST_PATH = ['playback', 'segmentWithBoundObservables', 'manifest', 'manifestResult'];
+
+  /** @param {any} v */
+  function looksLikeManifest(v) { return !!v && typeof v === 'object' && v.movieId != null && Array.isArray(v.timedtexttracks); }
+
+  /**
+   * Bounded search of an object graph for something manifest-shaped. Repair path for when
+   * MANIFEST_PATH goes stale: it found the manifest at depth 4 after ~1,100 objects.
+   * @param {any} root
+   * @returns {{value: any, path: string} | null}
+   */
+  function findManifest(root) {
+    const seen = new WeakSet();
+    let visited = 0;
+    /** @type {{value: any, path: string} | null} */
+    let found = null;
+    /** @param {any} v @param {string} path @param {number} depth */
+    const walk = (v, path, depth) => {
+      if (found || !v || typeof v !== 'object' || depth > 6 || visited > 60000) return;
+      if (seen.has(v)) return;
+      seen.add(v);
+      visited++;
+      if (typeof Node !== 'undefined' && v instanceof Node) return;
+      if (looksLikeManifest(v)) { found = { value: v, path }; return; }
+      let keys;
+      try { keys = Object.keys(v); } catch { return; }
+      for (const k of keys.slice(0, 400)) {
+        let c;
+        try { c = v[k]; } catch { continue; }
+        if (c && typeof c === 'object') walk(c, path + '.' + k, depth + 1);
+      }
+    };
+    walk(root, '$', 0);
+    return found;
+  }
+
+  /**
+   * The current manifest from the player object graph: direct path first, search second.
+   * @param {any} player
+   * @returns {{manifest: any, via: string} | null}
+   */
+  function manifestFromPlayer(player) {
+    let ip;
+    try { ip = player && typeof player.getInternalPlayer === 'function' ? player.getInternalPlayer() : null; } catch { ip = null; }
+    if (!ip) return null;
+    let v = ip;
+    for (const k of MANIFEST_PATH) v = v && typeof v === 'object' ? v[k] : undefined;
+    if (looksLikeManifest(v)) return { manifest: v, via: 'path' };
+    const hit = findManifest(ip);
+    return hit ? { manifest: hit.value, via: 'search ' + hit.path } : null;
+  }
+
+  /** Content time in ms: advances with content, frozen at the break location during ads. */
+  function contentTimeMs(player) {
+    try { return typeof player.getSegmentTime === 'function' ? player.getSegmentTime() : null; } catch { return null; }
+  }
+
+  /** Media time in ms as the player sees it (tracks video.currentTime). */
+  function mediaTimeMs(player) {
+    try { return typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : null; } catch { return null; }
+  }
+
+  /**
+   * Live ad state from the ad manager. `presenting` is the authoritative in-ad flag.
+   * @param {any} player
+   * @returns {{presenting: boolean, breakIndex: number | null} | null}
+   */
+  function adState(player) {
+    try {
+      const am = typeof player.getAdManager === 'function' ? player.getAdManager() : null;
+      if (!am) return null;
+      const presenting = !!(am.adPresenting && am.adPresenting._value);
+      let breakIndex = null;
+      try { const b = am.getPresentingAdBreak(); breakIndex = b && typeof b.viewableAdBreakIndex === 'number' ? b.viewableAdBreakIndex : null; } catch { /* absent */ }
+      return { presenting, breakIndex };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Ad breaks as the ad manager knows them. locationMs is CONTENT time. `ads` is only
+   * populated while a break is hydrated (shortly before it plays) and emptied afterwards.
+   * @param {any} player
+   * @returns {Array<{locationMs: number, isPreroll: boolean, hasPlayed: boolean, isHydrated: boolean, adMs: number | null}>}
+   */
+  function adBreaks(player) {
+    try {
+      const am = typeof player.getAdManager === 'function' ? player.getAdManager() : null;
+      const list = am && typeof am.getAds === 'function' ? am.getAds() : null;
+      if (!Array.isArray(list)) return [];
+      return list.map((b) => ({
+        locationMs: b.locationMs,
+        isPreroll: !!b.isPreroll,
+        hasPlayed: !!b.hasPlayed,
+        isHydrated: !!b.isHydrated,
+        adMs: Array.isArray(b.ads) ? b.ads.reduce((/** @type {number} */ s, /** @type {any} */ a) => s + ((a.endTimeMs ?? 0) - (a.startTimeMs ?? 0)), 0) : null,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   // ---- URLs ----------------------------------------------------------------
 
   /** @param {string} href */
@@ -208,7 +337,9 @@ var MC_NFLX = (() => {
     manifestFromParsed, nearMissReason, manifestRequestParams, shapeManifestRequest,
     trackDownloadUrl, describeTrack,
     SEL, AD_TEXT_RE, AD_TOKEN_RE,
-    playerApi, pickWatchSession, watchIdFromUrl,
+    playerApi, pickWatchSession, watchPlayer, MANIFEST_PATH, looksLikeManifest, findManifest, manifestFromPlayer,
+    contentTimeMs, mediaTimeMs, adState, adBreaks,
+    watchIdFromUrl,
   };
 })();
 
@@ -594,7 +725,7 @@ var MC_BRIDGE = (() => {
     const c = U.safe(() => bridge.call('clock'), null);
     if (!c) return 'api clock: bridge unavailable';
     if (c.api) return `api clock: ${c.api}`;
-    return `api.currentTime=${c.apiCurrentTime} api.duration=${c.apiDuration} api−video=${c.apiMinusVideoMs}ms`;
+    return `api.currentTime=${c.apiCurrentTime} content=${c.contentTimeMs}ms ad=${c.adPresenting}${c.adBreakIndex != null ? '#' + c.adBreakIndex : ''} api−video=${c.apiMinusVideoMs}ms`;
   }
 
   /** @param {HTMLVideoElement} v */
@@ -762,7 +893,7 @@ var MC_BRIDGE = (() => {
     watchdog = setTimeout(() => {
       const ms = /** @type {any[]} */ (U.safe(() => bridge.call('manifests'), []) ?? []);
       if (ms.some((m) => String(m.movieId) === id)) U.log(`watchdog ok: manifest for /watch/${id} was captured`);
-      else U.warn(`on /watch/${id} for ${WATCHDOG_MS / 1000}s but no manifest with movieId=${id} captured (captured: ${ms.map((m) => m.movieId).join(', ') || 'none'}). The JSON.parse hook may be stale — see src/netflix.js manifestFromParsed().`);
+      else U.warn(`on /watch/${id} for ${WATCHDOG_MS / 1000}s but no manifest with movieId=${id} captured (captured: ${ms.map((m) => m.movieId).join(', ') || 'none'}). Neither the player graph (MANIFEST_PATH / findManifest) nor the JSON.parse hook produced it — see src/netflix.js.`);
     }, WATCHDOG_MS);
   }
 
@@ -789,7 +920,26 @@ var MC_BRIDGE = (() => {
 
   // ---- boot --------------------------------------------------------------------------
 
-  function tick() { videoTick(); timedTextTick(); urlTick(); }
+  // ---- manifest via the player graph + DOM ad flag (verified selectors) -----------
+
+  let tickCount = 0;
+  let domAd = false;
+
+  function manifestTick() {
+    const id = N.watchIdFromUrl(location.href);
+    if (!id || tickCount % 4 !== 0) return;
+    const ms = /** @type {any[]} */ (U.safe(() => bridge.call('manifests'), []) ?? []);
+    if (ms.some((m) => String(m.movieId) === id)) return;
+    const r = U.safe(() => bridge.call('manifest-check'), 'bridge unavailable');
+    if (typeof r === 'string' && r.startsWith('captured')) mark('manifest:player', r);
+  }
+
+  function domAdTick() {
+    const now = !!document.querySelector(N.SEL.adsInfo);
+    if (now !== domAd) { domAd = now; mark('dom-ad', now ? `ON (${N.SEL.adsInfo} present)` : 'OFF'); }
+  }
+
+  function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); }
 
   function boot() {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });

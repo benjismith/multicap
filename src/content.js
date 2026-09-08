@@ -68,7 +68,7 @@
     const c = U.safe(() => bridge.call('clock'), null);
     if (!c) return 'api clock: bridge unavailable';
     if (c.api) return `api clock: ${c.api}`;
-    return `api.currentTime=${c.apiCurrentTime} api.duration=${c.apiDuration} api−video=${c.apiMinusVideoMs}ms`;
+    return `api.currentTime=${c.apiCurrentTime} content=${c.contentTimeMs}ms ad=${c.adPresenting}${c.adBreakIndex != null ? '#' + c.adBreakIndex : ''} api−video=${c.apiMinusVideoMs}ms`;
   }
 
   /** @param {HTMLVideoElement} v */
@@ -236,7 +236,7 @@
     watchdog = setTimeout(() => {
       const ms = /** @type {any[]} */ (U.safe(() => bridge.call('manifests'), []) ?? []);
       if (ms.some((m) => String(m.movieId) === id)) U.log(`watchdog ok: manifest for /watch/${id} was captured`);
-      else U.warn(`on /watch/${id} for ${WATCHDOG_MS / 1000}s but no manifest with movieId=${id} captured (captured: ${ms.map((m) => m.movieId).join(', ') || 'none'}). The JSON.parse hook may be stale — see src/netflix.js manifestFromParsed().`);
+      else U.warn(`on /watch/${id} for ${WATCHDOG_MS / 1000}s but no manifest with movieId=${id} captured (captured: ${ms.map((m) => m.movieId).join(', ') || 'none'}). Neither the player graph (MANIFEST_PATH / findManifest) nor the JSON.parse hook produced it — see src/netflix.js.`);
     }, WATCHDOG_MS);
   }
 
@@ -263,7 +263,26 @@
 
   // ---- boot --------------------------------------------------------------------------
 
-  function tick() { videoTick(); timedTextTick(); urlTick(); }
+  // ---- manifest via the player graph + DOM ad flag (verified selectors) -----------
+
+  let tickCount = 0;
+  let domAd = false;
+
+  function manifestTick() {
+    const id = N.watchIdFromUrl(location.href);
+    if (!id || tickCount % 4 !== 0) return;
+    const ms = /** @type {any[]} */ (U.safe(() => bridge.call('manifests'), []) ?? []);
+    if (ms.some((m) => String(m.movieId) === id)) return;
+    const r = U.safe(() => bridge.call('manifest-check'), 'bridge unavailable');
+    if (typeof r === 'string' && r.startsWith('captured')) mark('manifest:player', r);
+  }
+
+  function domAdTick() {
+    const now = !!document.querySelector(N.SEL.adsInfo);
+    if (now !== domAd) { domAd = now; mark('dom-ad', now ? `ON (${N.SEL.adsInfo} present)` : 'OFF'); }
+  }
+
+  function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); }
 
   function boot() {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
