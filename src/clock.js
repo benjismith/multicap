@@ -26,8 +26,8 @@ var MC_CLOCK = (() => {
   /** Player vs layer C disagreement that earns a warning. */
   const DIVERGE_S = 1.0;
   const HISTORY = 5;
-  /** Frames without a player clock before we announce the fallback. */
-  const FALLBACK_AFTER_FRAMES = 60;
+  /** How long the player clock must be missing before we announce the fallback. */
+  const FALLBACK_AFTER_MS = 1500;
 
   /** @param {number[]} xs */
   function median(xs) {
@@ -43,11 +43,11 @@ var MC_CLOCK = (() => {
   function create(bridge, getVideo, getDomAd) {
     let source = 'none';
     let playerFailures = 0;
+    let failingSince = 0;
     let fallbackAnnounced = false;
     let divergenceWarned = false;
     /** @type {null | ((text: string, estimate: number | null) => {begin: number, ambiguous: boolean} | null)} */
     let matcher = null;
-    let lastInAd = false;
     /** @type {number | null} last player content time (s), for disambiguation and cross-checking */
     let lastPlayerT = null;
 
@@ -65,32 +65,37 @@ var MC_CLOCK = (() => {
     /** @type {number[]} */
     let divergences = [];
 
+    /** One sample from the page hook: [contentMs, adPresenting, movieId] or null. */
+    function playerSample() {
+      try { return bridge.call('t'); } catch { return null; }
+    }
+
     /** @returns {{t: number, inAd: boolean, source: string, movieId: any}} t is content seconds */
     function now() {
       const v = getVideo();
       const media = v ? v.currentTime : 0;
-      let r = null;
-      try { r = bridge.call('t'); } catch { r = null; }
+      const r = playerSample();
       const contentMs = r && typeof r[0] === 'number' ? r[0] : null;
       const adFlag = r && typeof r[1] === 'boolean' ? r[1] : null;
       const inAd = adFlag !== null ? adFlag : !!getDomAd();
-      lastInAd = inAd;
       if (contentMs !== null) {
         if (source !== 'player') {
           if (source === 'video') MC_UTIL.log('clock: player content clock is back; leaving layer C fallback');
           source = 'player';
         }
         playerFailures = 0;
+        failingSince = 0;
         fallbackAnnounced = false;
         lastPlayerT = contentMs / 1000;
         return { t: lastPlayerT + LEAD_S, inAd, source, movieId: r[2] };
       }
       playerFailures++;
       lastPlayerT = null;
-      if (playerFailures >= FALLBACK_AFTER_FRAMES && !fallbackAnnounced) {
+      if (!failingSince) failingSince = Date.now();
+      if (Date.now() - failingSince >= FALLBACK_AFTER_MS && !fallbackAnnounced) {
         fallbackAnnounced = true;
         source = 'video';
-        MC_UTIL.warn(`clock: no player content clock for ${FALLBACK_AFTER_FRAMES} frames (${r ? 'getSegmentTime missing/throwing' : 'no watch player'}); using video.currentTime + layer C offset (${offsetKnown ? offset.toFixed(3) + 's' : 'unknown yet, assuming 0'}). Netflix's own subtitles must be ON for layer C to calibrate.`);
+        MC_UTIL.warn(`clock: no player content clock for ${FALLBACK_AFTER_MS} ms (${r ? 'getSegmentTime missing/throwing' : 'no watch player'}); using video.currentTime + layer C offset (${offsetKnown ? offset.toFixed(3) + 's' : 'unknown yet, assuming 0'}). Netflix's own subtitles must be ON for layer C to calibrate.`);
       }
       if (source !== 'player') source = 'video';
       return { t: media + offset, inAd, source, movieId: r ? r[2] : null };
@@ -104,9 +109,13 @@ var MC_CLOCK = (() => {
      * @param {string} text @param {number} media
      */
     function observeNative(text, media) {
-      if (!matcher || lastInAd) return;
+      if (!matcher) return;
+      const r = playerSample();
+      const playerT = r && typeof r[0] === 'number' ? r[0] / 1000 : null;
+      const inAd = r && typeof r[1] === 'boolean' ? r[1] : !!getDomAd();
+      if (inAd) return;
       const estimate = offsetKnown ? media + offset : null;
-      const hint = estimate ?? lastPlayerT;
+      const hint = estimate ?? playerT;
       const m = matcher(text, hint);
       if (!m) { unmatched++; return; }
       if (m.ambiguous && hint == null) return; // wait for a cue whose text is unique
@@ -125,7 +134,7 @@ var MC_CLOCK = (() => {
       } else {
         pending = o;
       }
-      const div = lastPlayerT != null ? +(lastPlayerT - (media + offset)).toFixed(3) : null;
+      const div = playerT != null ? +(playerT - (media + offset)).toFixed(3) : null;
       if (div != null) {
         divergences.push(div);
         if (divergences.length > 8) divergences.shift();
@@ -134,7 +143,7 @@ var MC_CLOCK = (() => {
           MC_UTIL.warn(`clock: player clock and layer C disagree by ${median(divergences).toFixed(2)}s (median of ${divergences.length}). One of them changed meaning; check getSegmentTime() vs native cue timing.`);
         }
       }
-      matches.push({ media: +media.toFixed(3), begin: m.begin, offset: +o.toFixed(3), text: text.slice(0, 40), player: lastPlayerT != null ? +lastPlayerT.toFixed(3) : null, div });
+      matches.push({ media: +media.toFixed(3), begin: m.begin, offset: +o.toFixed(3), text: text.slice(0, 40), player: playerT != null ? +playerT.toFixed(3) : null, div });
     }
 
     /** A seek or a new <video> element: the media→content mapping is unknown again (plain seeks re-base it to 0). */
