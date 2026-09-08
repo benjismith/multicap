@@ -4,8 +4,8 @@
  *
  * A small pill in the top-right corner ("EN + 简") shows while Netflix's controls
  * are visible; clicking it (or Ctrl+Shift+M) opens the settings panel. The two
- * lines are fixed (English over Simplified Chinese); the panel reports whether
- * the current title has them. Mounted inside the player view so it survives
+ * lines are fixed (English over Simplified Chinese); the pill reflects what the
+ * current title actually has. Mounted inside the player view so it survives
  * fullscreen. Styles go through CSSOM.
  */
 var MC_PICKER = (() => {
@@ -41,7 +41,8 @@ var MC_PICKER = (() => {
     let controlsVisible = false;
     /**
      * `resolved`: the language actually used for each line on the current title
-     * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing.
+     * (null = no usable track), e.g. ['en', 'zh-Hant'] when Simplified is missing;
+     * it only feeds the pill.
      * @type {{enabled: boolean, pinyin: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean, rubyUnder: boolean}, assist: {mode: string, secondsPerChar: number, autoResume: boolean, extend: boolean}}}
      */
     let state = { enabled: true, pinyin: true, resolved: ['en', 'zh-Hans'], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false, rubyUnder: true }, assist: { mode: 'off', secondsPerChar: 0.4, autoResume: true, extend: true } };
@@ -158,20 +159,7 @@ var MC_PICKER = (() => {
       title.appendChild(close);
       panel.appendChild(title);
 
-      // ---- the fixed pair, and whether this title has it ----
-      const pair = document.createElement('div');
-      pair.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:4px 0 8px;';
-      const lineStatus = (/** @type {string} */ label, /** @type {string} */ want, /** @type {string | null} */ got) => {
-        const ok = got != null;
-        const exact = ok && got.toLowerCase() === want.toLowerCase();
-        const text = !ok ? `${label}: no track on this title` : exact ? `${label}: ${got}` : `${label}: ${got} (no ${want} track; showing ${short(got)})`;
-        return el(`${ok ? '●' : '○'}  ${text}`, `color:${ok ? 'rgba(255,255,255,.9)' : 'rgba(255,120,120,.9)'};`);
-      };
-      pair.appendChild(lineStatus('Top line, English', 'en', state.resolved[0]));
-      pair.appendChild(lineStatus('Bottom line, Simplified Chinese', 'zh-Hans', state.resolved[1]));
-      panel.appendChild(pair);
-
-      const styleHead = el('Style', HEAD_CSS + 'margin-top:10px;');
+      const styleHead = el('Style', HEAD_CSS);
       panel.appendChild(styleHead);
       /**
        * @param {string} label @param {number} value @param {number[]} range @param {number} step
