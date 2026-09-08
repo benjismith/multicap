@@ -255,12 +255,14 @@
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+    onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled }); return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style }); overlay.setStyle(st.style); return st; });
   let lastLangsKey = '';
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ langs: st.langs, enabled: st.enabled });
-    mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled}`);
+    picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style });
+    overlay.setStyle(st.style);
+    mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled} style=${JSON.stringify(st.style)}`, { quiet: true });
     const key = st.langs.join('|');
     if (key !== lastLangsKey && session) startSession(session.movieId, 'slots changed', true);
     lastLangsKey = key;
@@ -486,10 +488,11 @@
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{langs?: Array<string | null>, enabled?: boolean}} */
+    /** @type {{langs?: Array<string | null>, enabled?: boolean, style?: any}} */
     const clean = {};
     if (Array.isArray(patch.langs)) clean.langs = patch.langs;
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });

@@ -993,10 +993,9 @@ var MC_OVERLAY = (() => {
   const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
   const ROOT_CSS = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 5% 7%;box-sizing:border-box;z-index:1;';
   const LINE_CSS = 'color:#fff;text-align:center;white-space:pre-line;line-height:1.3;max-width:90%;margin:0.1em 0;padding:0.05em 0.4em;font-weight:500;font-family:' + FONT + ';text-shadow:0 0 6px rgba(0,0,0,.9),0 0 2px #000,1px 1px 2px #000;';
-  /** Per-line font scale relative to the base size (index 0 = first configured track). */
-  const LINE_SCALE = [1, 1.15];
-  /** Base font size as a fraction of the picture box height. */
+  /** Base font size as a fraction of the picture box height, before the user's scale. */
   const BASE_SIZE_RATIO = 0.042;
+  const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
 
   function create() {
     /** @type {HTMLDivElement | null} */
@@ -1010,11 +1009,30 @@ var MC_OVERLAY = (() => {
     /** @type {string[]} */
     let lastTexts = [];
     let lastVisible = true;
+    let raised = false;
+    /** @type {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} */
+    let style = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
 
     function fit() {
       if (!root || !host) return;
       const h = host.getBoundingClientRect().height;
-      if (h > 0) root.style.fontSize = Math.max(14, Math.round(h * BASE_SIZE_RATIO)) + 'px';
+      if (h > 0) root.style.fontSize = Math.max(10, Math.round(h * BASE_SIZE_RATIO * style.scale)) + 'px';
+    }
+
+    function applyStyle() {
+      if (!root) return;
+      fit();
+      root.style.paddingBottom = (style.bottom + (raised ? 10 : 0)) + '%';
+      lines.forEach((el, i) => {
+        el.style.fontSize = (style.slotScale[i] ?? 1) + 'em';
+        el.style.cssText = LINE_CSS + 'font-size:' + (style.slotScale[i] ?? 1) + 'em;' + (style.backdrop ? BACKDROP_CSS : '') + (el.style.display === 'none' ? 'display:none;' : '');
+      });
+    }
+
+    /** @param {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} st */
+    function setStyle(st) {
+      style = { ...style, ...st };
+      applyStyle();
     }
 
     /**
@@ -1033,23 +1051,23 @@ var MC_OVERLAY = (() => {
       for (let i = 0; i < lineCount; i++) {
         const el = document.createElement('div');
         el.className = 'multicap-line multicap-line-' + i;
-        el.style.cssText = LINE_CSS + 'font-size:' + (LINE_SCALE[i] ?? 1) + 'em;display:none;';
+        el.style.cssText = LINE_CSS + 'display:none;';
         root.appendChild(el);
         lines.push(el);
       }
       host.appendChild(root);
       ro = new ResizeObserver(fit);
       ro.observe(host);
-      fit();
+      applyStyle();
       lastTexts = [];
       lastVisible = true;
       return true;
     }
 
-    /** Push the lines up while Netflix's control bar is showing. @param {boolean} raised */
-    function setRaised(raised) {
-      if (!root) return;
-      root.style.paddingBottom = raised ? '17%' : '7%';
+    /** Push the lines up while Netflix's control bar is showing. @param {boolean} r */
+    function setRaised(r) {
+      raised = r;
+      if (root) root.style.paddingBottom = (style.bottom + (raised ? 10 : 0)) + '%';
     }
 
     function detach() {
@@ -1080,7 +1098,7 @@ var MC_OVERLAY = (() => {
       }
     }
 
-    return { attach, detach, render, setRaised, get mounted() { return !!(root && root.isConnected); } };
+    return { attach, detach, render, setRaised, setStyle, get mounted() { return !!(root && root.isConnected); } };
   }
   return { create };
 })();
@@ -1095,10 +1113,19 @@ var MC_OVERLAY = (() => {
  * by MC_NFLX.pickTrack(), so a preference carries across titles.
  */
 var MC_SETTINGS = (() => {
-  /** @typedef {{langs: Array<string | null>, enabled: boolean}} Settings */
+  /**
+   * @typedef {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} Style
+   * scale: overall font size multiplier; bottom: distance from the picture's bottom edge in %;
+   * slotScale: per-line multipliers (top, bottom); backdrop: translucent box behind each line.
+   */
+  /** @typedef {{langs: Array<string | null>, enabled: boolean, style: Style}} Settings */
   const KEY = 'multicap';
+  /** @type {Style} */
+  const DEFAULT_STYLE = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
+  /** Allowed ranges for the sliders; anything outside is clamped on load and save. */
+  const RANGES = { scale: [0.6, 1.8], bottom: [2, 30], slotScale: [0.6, 1.8] };
   /** @type {Settings} */
-  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true };
+  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true, style: DEFAULT_STYLE };
   /** @type {Settings | null} */
   let cache = null;
   /** @type {Array<(s: Settings) => void>} */
@@ -1122,12 +1149,20 @@ var MC_SETTINGS = (() => {
     if (!Array.isArray(s.langs)) s.langs = DEFAULTS.langs.slice();
     s.langs = [0, 1].map((i) => (typeof s.langs[i] === 'string' && s.langs[i] ? s.langs[i] : null));
     s.enabled = s.enabled !== false;
+    const st = { ...DEFAULT_STYLE, ...(s.style && typeof s.style === 'object' ? s.style : {}) };
+    const clamp = (/** @type {any} */ v, /** @type {number[]} */ r, /** @type {number} */ d) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(r[1], Math.max(r[0], v)) : d);
+    st.scale = clamp(st.scale, RANGES.scale, DEFAULT_STYLE.scale);
+    st.bottom = clamp(st.bottom, RANGES.bottom, DEFAULT_STYLE.bottom);
+    st.slotScale = [0, 1].map((i) => clamp(Array.isArray(st.slotScale) ? st.slotScale[i] : undefined, RANGES.slotScale, DEFAULT_STYLE.slotScale[i]));
+    st.backdrop = st.backdrop === true;
+    s.style = st;
     return s;
   }
 
-  /** @param {Partial<Settings>} patch @returns {Promise<Settings>} */
+  /** @param {{langs?: Array<string | null>, enabled?: boolean, style?: Partial<Style>}} patch @returns {Promise<Settings>} */
   async function save(patch) {
-    cache = normalize({ ...(cache || DEFAULTS), ...patch });
+    const cur = cache || DEFAULTS;
+    cache = normalize({ ...cur, ...patch, style: { ...cur.style, ...(patch.style || {}) } });
     try { await chrome.storage.local.set({ [KEY]: cache }); } catch (err) { MC_UTIL.warn('settings: save failed:', err); }
     for (const fn of listeners) { try { fn(cache); } catch (err) { MC_UTIL.warn('settings listener threw:', err); } }
     return cache;
@@ -1139,7 +1174,7 @@ var MC_SETTINGS = (() => {
   /** @param {(s: Settings) => void} fn */
   function onChange(fn) { listeners.push(fn); }
 
-  return { DEFAULTS, load, save, get, onChange };
+  return { DEFAULTS, DEFAULT_STYLE, RANGES, load, save, get, onChange, normalize };
 })();
 
 // ===== src/picker.js =====
@@ -1169,8 +1204,11 @@ var MC_PICKER = (() => {
     return SHORT[k] || k.split('-')[0].toUpperCase();
   }
 
+  const SLIDER_CSS = 'width:100%;margin:0;accent-color:#e50914;cursor:pointer;';
+  const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
+
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -1178,13 +1216,13 @@ var MC_PICKER = (() => {
     /** @type {HTMLButtonElement | null} */
     let pill = null;
     /** @type {HTMLDivElement | null} */
-    let panel = null;
+    let panelEl = null;
     let open = false;
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, resolved: Array<string | null>}} */
-    let state = { langs: [null, null], enabled: true, resolved: [null, null] };
+    /** @type {{langs: Array<string | null>, enabled: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}}} */
+    let state = { langs: [null, null], enabled: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -1197,12 +1235,12 @@ var MC_PICKER = (() => {
       pill.style.cssText = PILL_CSS;
       pill.title = 'multicap: choose subtitle tracks (Ctrl+Shift+M)';
       pill.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
-      panel = document.createElement('div');
-      panel.className = 'multicap-panel';
-      panel.style.cssText = PANEL_CSS + 'display:none;';
-      for (const ev of ['click', 'mousedown', 'mouseup', 'keydown', 'keyup', 'pointerdown', 'pointerup']) panel.addEventListener(ev, (e) => e.stopPropagation());
+      panelEl = document.createElement('div');
+      panelEl.className = 'multicap-panel';
+      panelEl.style.cssText = PANEL_CSS + 'display:none;';
+      for (const ev of ['click', 'mousedown', 'mouseup', 'keydown', 'keyup', 'pointerdown', 'pointerup']) panelEl.addEventListener(ev, (e) => e.stopPropagation());
       host.appendChild(pill);
-      host.appendChild(panel);
+      host.appendChild(panelEl);
       renderPill();
       renderPanel();
       updatePillVisibility();
@@ -1210,8 +1248,8 @@ var MC_PICKER = (() => {
 
     function unmount() {
       if (pill) pill.remove();
-      if (panel) panel.remove();
-      pill = null; panel = null; host = null; open = false;
+      if (panelEl) panelEl.remove();
+      pill = null; panelEl = null; host = null; open = false;
     }
 
     /** @param {Array<any>} trackRows rows from the page hook (describeTrack + url) */
@@ -1227,12 +1265,14 @@ var MC_PICKER = (() => {
       renderPanel();
     }
 
-    /** @param {{langs?: Array<string | null>, enabled?: boolean, resolved?: Array<string | null>}} st */
+    /** @param {{langs?: Array<string | null>, enabled?: boolean, resolved?: Array<string | null>, style?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
-      renderPanel();
+      if (!sliding) renderPanel();
     }
+    /** True while a slider is being dragged, so live style updates don't rebuild the panel under the pointer. */
+    let sliding = false;
 
     /** @param {boolean} v */
     function setControlsVisible(v) {
@@ -1244,7 +1284,7 @@ var MC_PICKER = (() => {
     /** @param {boolean} [force] */
     function toggle(force) {
       open = force ?? !open;
-      if (panel) panel.style.display = open ? '' : 'none';
+      if (panelEl) panelEl.style.display = open ? '' : 'none';
       updatePillVisibility();
     }
 
@@ -1285,6 +1325,7 @@ var MC_PICKER = (() => {
     }
 
     function renderPanel() {
+      const panel = panelEl;
       if (!panel) return;
       panel.textContent = '';
       const title = document.createElement('div');
@@ -1322,6 +1363,44 @@ var MC_PICKER = (() => {
         row.appendChild(radio(1, t.lang, resolvedOrLang(1) === t.lang));
         panel.appendChild(row);
       }
+
+      const styleHead = el('Style', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;');
+      panel.appendChild(styleHead);
+      /**
+       * @param {string} label @param {number} value @param {number[]} range @param {number} step
+       * @param {(v: number) => string} fmt @param {(v: number) => void} onInput
+       */
+      const slider = (label, value, range, step, fmt, onInput) => {
+        const row = document.createElement('div');
+        row.style.cssText = SLIDER_ROW_CSS;
+        row.appendChild(el(label, 'color:rgba(255,255,255,.85);'));
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = String(range[0]); input.max = String(range[1]); input.step = String(step); input.value = String(value);
+        input.style.cssText = SLIDER_CSS;
+        const out = el(fmt(value), 'text-align:right;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums;');
+        input.addEventListener('pointerdown', () => { sliding = true; });
+        input.addEventListener('pointerup', () => { sliding = false; });
+        input.addEventListener('input', () => { const v = parseFloat(input.value); out.textContent = fmt(v); onInput(v); });
+        input.addEventListener('change', () => { sliding = false; });
+        row.appendChild(input);
+        row.appendChild(out);
+        panel.appendChild(row);
+      };
+      const pct = (/** @type {number} */ v) => Math.round(v * 100) + '%';
+      const st = state.style;
+      slider('Size', st.scale, MC_SETTINGS.RANGES.scale, 0.05, pct, (v) => handlers.onStyle({ scale: v }));
+      slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
+      slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
+      slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
+      const bd = document.createElement('label');
+      bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const bdc = document.createElement('input');
+      bdc.type = 'checkbox'; bdc.checked = st.backdrop; bdc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      bdc.addEventListener('change', () => handlers.onStyle({ backdrop: bdc.checked }));
+      bd.appendChild(bdc);
+      bd.appendChild(el('Backdrop behind lines', 'flex:1;'));
+      panel.appendChild(bd);
 
       const foot = document.createElement('label');
       foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';
@@ -1600,12 +1679,14 @@ var MC_PICKER = (() => {
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+    onStyle(patch) { MC_SETTINGS.save({ style: patch }); },
   });
-  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled }); return st; });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style }); overlay.setStyle(st.style); return st; });
   let lastLangsKey = '';
   MC_SETTINGS.onChange((st) => {
-    picker.setState({ langs: st.langs, enabled: st.enabled });
-    mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled}`);
+    picker.setState({ langs: st.langs, enabled: st.enabled, style: st.style });
+    overlay.setStyle(st.style);
+    mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled} style=${JSON.stringify(st.style)}`, { quiet: true });
     const key = st.langs.join('|');
     if (key !== lastLangsKey && session) startSession(session.movieId, 'slots changed', true);
     lastLangsKey = key;
@@ -1831,10 +1912,11 @@ var MC_PICKER = (() => {
   bridge.handle('settings-get', () => MC_SETTINGS.get());
   bridge.handle('settings-set', (/** @type {any} */ patch) => {
     if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
-    /** @type {{langs?: Array<string | null>, enabled?: boolean}} */
+    /** @type {{langs?: Array<string | null>, enabled?: boolean, style?: any}} */
     const clean = {};
     if (Array.isArray(patch.langs)) clean.langs = patch.langs;
     if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    if (patch.style && typeof patch.style === 'object') clean.style = patch.style;
     MC_SETTINGS.save(clean);
     return MC_SETTINGS.get();
   });

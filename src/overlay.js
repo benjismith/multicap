@@ -11,10 +11,9 @@ var MC_OVERLAY = (() => {
   const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
   const ROOT_CSS = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 5% 7%;box-sizing:border-box;z-index:1;';
   const LINE_CSS = 'color:#fff;text-align:center;white-space:pre-line;line-height:1.3;max-width:90%;margin:0.1em 0;padding:0.05em 0.4em;font-weight:500;font-family:' + FONT + ';text-shadow:0 0 6px rgba(0,0,0,.9),0 0 2px #000,1px 1px 2px #000;';
-  /** Per-line font scale relative to the base size (index 0 = first configured track). */
-  const LINE_SCALE = [1, 1.15];
-  /** Base font size as a fraction of the picture box height. */
+  /** Base font size as a fraction of the picture box height, before the user's scale. */
   const BASE_SIZE_RATIO = 0.042;
+  const BACKDROP_CSS = 'background:rgba(0,0,0,.55);border-radius:0.25em;padding:0.08em 0.5em;';
 
   function create() {
     /** @type {HTMLDivElement | null} */
@@ -28,11 +27,30 @@ var MC_OVERLAY = (() => {
     /** @type {string[]} */
     let lastTexts = [];
     let lastVisible = true;
+    let raised = false;
+    /** @type {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} */
+    let style = { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false };
 
     function fit() {
       if (!root || !host) return;
       const h = host.getBoundingClientRect().height;
-      if (h > 0) root.style.fontSize = Math.max(14, Math.round(h * BASE_SIZE_RATIO)) + 'px';
+      if (h > 0) root.style.fontSize = Math.max(10, Math.round(h * BASE_SIZE_RATIO * style.scale)) + 'px';
+    }
+
+    function applyStyle() {
+      if (!root) return;
+      fit();
+      root.style.paddingBottom = (style.bottom + (raised ? 10 : 0)) + '%';
+      lines.forEach((el, i) => {
+        el.style.fontSize = (style.slotScale[i] ?? 1) + 'em';
+        el.style.cssText = LINE_CSS + 'font-size:' + (style.slotScale[i] ?? 1) + 'em;' + (style.backdrop ? BACKDROP_CSS : '') + (el.style.display === 'none' ? 'display:none;' : '');
+      });
+    }
+
+    /** @param {{scale: number, bottom: number, slotScale: number[], backdrop: boolean}} st */
+    function setStyle(st) {
+      style = { ...style, ...st };
+      applyStyle();
     }
 
     /**
@@ -51,23 +69,23 @@ var MC_OVERLAY = (() => {
       for (let i = 0; i < lineCount; i++) {
         const el = document.createElement('div');
         el.className = 'multicap-line multicap-line-' + i;
-        el.style.cssText = LINE_CSS + 'font-size:' + (LINE_SCALE[i] ?? 1) + 'em;display:none;';
+        el.style.cssText = LINE_CSS + 'display:none;';
         root.appendChild(el);
         lines.push(el);
       }
       host.appendChild(root);
       ro = new ResizeObserver(fit);
       ro.observe(host);
-      fit();
+      applyStyle();
       lastTexts = [];
       lastVisible = true;
       return true;
     }
 
-    /** Push the lines up while Netflix's control bar is showing. @param {boolean} raised */
-    function setRaised(raised) {
-      if (!root) return;
-      root.style.paddingBottom = raised ? '17%' : '7%';
+    /** Push the lines up while Netflix's control bar is showing. @param {boolean} r */
+    function setRaised(r) {
+      raised = r;
+      if (root) root.style.paddingBottom = (style.bottom + (raised ? 10 : 0)) + '%';
     }
 
     function detach() {
@@ -98,7 +116,7 @@ var MC_OVERLAY = (() => {
       }
     }
 
-    return { attach, detach, render, setRaised, get mounted() { return !!(root && root.isConnected); } };
+    return { attach, detach, render, setRaised, setStyle, get mounted() { return !!(root && root.isConnected); } };
   }
   return { create };
 })();

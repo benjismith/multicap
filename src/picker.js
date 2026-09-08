@@ -24,8 +24,11 @@ var MC_PICKER = (() => {
     return SHORT[k] || k.split('-')[0].toUpperCase();
   }
 
+  const SLIDER_CSS = 'width:100%;margin:0;accent-color:#e50914;cursor:pointer;';
+  const SLIDER_ROW_CSS = 'display:grid;grid-template-columns:110px 1fr 44px;align-items:center;gap:10px;padding:4px 0;';
+
   /**
-   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void}} handlers
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void, onStyle: (patch: {scale?: number, bottom?: number, slotScale?: number[], backdrop?: boolean}) => void}} handlers
    */
   function create(handlers) {
     /** @type {HTMLElement | null} */
@@ -33,13 +36,13 @@ var MC_PICKER = (() => {
     /** @type {HTMLButtonElement | null} */
     let pill = null;
     /** @type {HTMLDivElement | null} */
-    let panel = null;
+    let panelEl = null;
     let open = false;
     let controlsVisible = false;
     /** @type {Array<any>} */
     let rows = [];
-    /** @type {{langs: Array<string | null>, enabled: boolean, resolved: Array<string | null>}} */
-    let state = { langs: [null, null], enabled: true, resolved: [null, null] };
+    /** @type {{langs: Array<string | null>, enabled: boolean, resolved: Array<string | null>, style: {scale: number, bottom: number, slotScale: number[], backdrop: boolean}}} */
+    let state = { langs: [null, null], enabled: true, resolved: [null, null], style: { scale: 1, bottom: 7, slotScale: [1, 1.15], backdrop: false } };
 
     /** @param {HTMLElement} container */
     function mount(container) {
@@ -52,12 +55,12 @@ var MC_PICKER = (() => {
       pill.style.cssText = PILL_CSS;
       pill.title = 'multicap: choose subtitle tracks (Ctrl+Shift+M)';
       pill.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
-      panel = document.createElement('div');
-      panel.className = 'multicap-panel';
-      panel.style.cssText = PANEL_CSS + 'display:none;';
-      for (const ev of ['click', 'mousedown', 'mouseup', 'keydown', 'keyup', 'pointerdown', 'pointerup']) panel.addEventListener(ev, (e) => e.stopPropagation());
+      panelEl = document.createElement('div');
+      panelEl.className = 'multicap-panel';
+      panelEl.style.cssText = PANEL_CSS + 'display:none;';
+      for (const ev of ['click', 'mousedown', 'mouseup', 'keydown', 'keyup', 'pointerdown', 'pointerup']) panelEl.addEventListener(ev, (e) => e.stopPropagation());
       host.appendChild(pill);
-      host.appendChild(panel);
+      host.appendChild(panelEl);
       renderPill();
       renderPanel();
       updatePillVisibility();
@@ -65,8 +68,8 @@ var MC_PICKER = (() => {
 
     function unmount() {
       if (pill) pill.remove();
-      if (panel) panel.remove();
-      pill = null; panel = null; host = null; open = false;
+      if (panelEl) panelEl.remove();
+      pill = null; panelEl = null; host = null; open = false;
     }
 
     /** @param {Array<any>} trackRows rows from the page hook (describeTrack + url) */
@@ -82,12 +85,14 @@ var MC_PICKER = (() => {
       renderPanel();
     }
 
-    /** @param {{langs?: Array<string | null>, enabled?: boolean, resolved?: Array<string | null>}} st */
+    /** @param {{langs?: Array<string | null>, enabled?: boolean, resolved?: Array<string | null>, style?: any}} st */
     function setState(st) {
       state = { ...state, ...st };
       renderPill();
-      renderPanel();
+      if (!sliding) renderPanel();
     }
+    /** True while a slider is being dragged, so live style updates don't rebuild the panel under the pointer. */
+    let sliding = false;
 
     /** @param {boolean} v */
     function setControlsVisible(v) {
@@ -99,7 +104,7 @@ var MC_PICKER = (() => {
     /** @param {boolean} [force] */
     function toggle(force) {
       open = force ?? !open;
-      if (panel) panel.style.display = open ? '' : 'none';
+      if (panelEl) panelEl.style.display = open ? '' : 'none';
       updatePillVisibility();
     }
 
@@ -140,6 +145,7 @@ var MC_PICKER = (() => {
     }
 
     function renderPanel() {
+      const panel = panelEl;
       if (!panel) return;
       panel.textContent = '';
       const title = document.createElement('div');
@@ -177,6 +183,44 @@ var MC_PICKER = (() => {
         row.appendChild(radio(1, t.lang, resolvedOrLang(1) === t.lang));
         panel.appendChild(row);
       }
+
+      const styleHead = el('Style', HEAD_CSS.replace('grid-template-columns:1fr 64px 64px', 'grid-template-columns:1fr') + 'margin-top:10px;');
+      panel.appendChild(styleHead);
+      /**
+       * @param {string} label @param {number} value @param {number[]} range @param {number} step
+       * @param {(v: number) => string} fmt @param {(v: number) => void} onInput
+       */
+      const slider = (label, value, range, step, fmt, onInput) => {
+        const row = document.createElement('div');
+        row.style.cssText = SLIDER_ROW_CSS;
+        row.appendChild(el(label, 'color:rgba(255,255,255,.85);'));
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = String(range[0]); input.max = String(range[1]); input.step = String(step); input.value = String(value);
+        input.style.cssText = SLIDER_CSS;
+        const out = el(fmt(value), 'text-align:right;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums;');
+        input.addEventListener('pointerdown', () => { sliding = true; });
+        input.addEventListener('pointerup', () => { sliding = false; });
+        input.addEventListener('input', () => { const v = parseFloat(input.value); out.textContent = fmt(v); onInput(v); });
+        input.addEventListener('change', () => { sliding = false; });
+        row.appendChild(input);
+        row.appendChild(out);
+        panel.appendChild(row);
+      };
+      const pct = (/** @type {number} */ v) => Math.round(v * 100) + '%';
+      const st = state.style;
+      slider('Size', st.scale, MC_SETTINGS.RANGES.scale, 0.05, pct, (v) => handlers.onStyle({ scale: v }));
+      slider('Height', st.bottom, MC_SETTINGS.RANGES.bottom, 1, (v) => v + '%', (v) => handlers.onStyle({ bottom: v }));
+      slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
+      slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
+      const bd = document.createElement('label');
+      bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
+      const bdc = document.createElement('input');
+      bdc.type = 'checkbox'; bdc.checked = st.backdrop; bdc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      bdc.addEventListener('change', () => handlers.onStyle({ backdrop: bdc.checked }));
+      bd.appendChild(bdc);
+      bd.appendChild(el('Backdrop behind lines', 'flex:1;'));
+      panel.appendChild(bd);
 
       const foot = document.createElement('label');
       foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';
