@@ -274,7 +274,31 @@
     play: resumePlayback,
     setRate: (r) => { U.safe(() => bridge.call('rate', r)); },
     getRate: () => Number(U.safe(() => bridge.call('get-rate'), 1)) || 1,
+    sample: () => assistFrame(),
   }, (msg) => mark('assist', msg));
+
+  /**
+   * A fresh frame for the reading assist: content time, the Chinese caption on screen and
+   * its end. Used by the render loop and, on demand, by the assist's timers.
+   * @returns {{t: number, wall: number, paused: boolean, inAd: boolean, zh: string, end: number} | null}
+   */
+  function assistFrame() {
+    const s = session;
+    if (!s || !video) return null;
+    const c = clock.now();
+    const hidden = (c.movieId != null && String(c.movieId) !== String(s.movieId)) || c.inAd || !MC_SETTINGS.get().enabled;
+    let zh = '';
+    let end = -Infinity;
+    if (!hidden) {
+      for (const l of s.lines) {
+        if (!l || !l.hans) continue;
+        const active = MC_SUBS.activeCues(l.cues, c.t, { i: l.cursor.i });
+        zh = active.map((x) => x.text).join('\n');
+        for (const x of active) end = Math.max(end, x.end);
+      }
+    }
+    return { t: c.t, wall: performance.now(), paused: video.paused, inAd: c.inAd || hidden, zh, end };
+  }
   const picker = MC_PICKER.create({
     onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
     onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },

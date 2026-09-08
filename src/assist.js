@@ -19,10 +19,13 @@ var MC_ASSIST = (() => {
   const MIN_PAUSE_S = 0.2;
 
   /** @typedef {{mode: 'off' | 'pause' | 'slow' | 'slowpause', secondsPerChar: number, minRate: number, autoResume: boolean}} Config */
-  /** @typedef {{key: string, chars: number, required: number, startWall: number, end: number, baseRate: number, slowed: number | null, pausedByUs: boolean, acted: boolean, resumeHandle: number}} Caption */
+  /** @typedef {{key: string, chars: number, required: number, startWall: number, end: number, baseRate: number, slowed: number | null, pausedByUs: boolean, acted: boolean, resumeHandle: number, actHandle: number}} Caption */
+  /** @typedef {{t: number, wall: number, paused: boolean, inAd: boolean, zh: string, end: number}} Frame */
 
   /**
-   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number}} actions
+   * @param {{pause: () => void, play: () => void, setRate: (r: number) => void, getRate: () => number, sample?: () => Frame | null}} actions
+   *   `sample` returns a fresh frame on demand; the render loop can run at a few frames per
+   *   second (observed ~10 fps), so the moment to act is scheduled with a timer as well.
    * @param {(msg: string) => void} log
    */
   function create(actions, log) {
@@ -36,6 +39,8 @@ var MC_ASSIST = (() => {
     const trace = MC_UTIL.ring(40);
     /** @type {{t: number, paused: boolean} | null} last frame seen for the current caption */
     let lastFrame = null;
+    let lastWall = 0;
+    let frameGapMs = 0;
     /** @param {string} ev @param {Record<string, any>} [x] */
     const tr = (ev, x = {}) => trace.push({ ev, at: +(performance.now() / 1000).toFixed(1), ...x });
 
@@ -51,8 +56,45 @@ var MC_ASSIST = (() => {
       if (!cap.acted) tr('drop-unacted', { key: cap.key.slice(0, 12), end: cap.end, lastT: lastFrame && lastFrame.t, lastPaused: lastFrame && lastFrame.paused });
       if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* player gone */ } }
       if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
+      if (cap.actHandle) clearTimeout(cap.actHandle);
       cap = null;
       lastFrame = null;
+    }
+
+    /**
+     * Schedule the act moment by wall clock: frames may be sparse, timers are not.
+     * @param {Caption} c @param {Frame} f
+     */
+    function scheduleAct(c, f) {
+      if (cfg.mode === 'slow' || f.paused) return;
+      const rate = c.slowed ?? c.baseRate ?? 1;
+      const ms = Math.max(0, ((c.end - EPS - f.t) / (rate || 1)) * 1000) + 5;
+      c.actHandle = window.setTimeout(() => {
+        if (cap !== c || c.acted || !actions.sample) return;
+        const g = actions.sample();
+        if (!g || g.zh + '@' + g.end !== c.key || g.paused || g.inAd) { tr('timer-skip', { reason: !g ? 'no sample' : g.paused ? 'paused' : g.inAd ? 'ad' : 'caption changed' }); return; }
+        tr('timer', { t: +g.t.toFixed(3), end: c.end });
+        act(g);
+      }, ms);
+    }
+
+    /** The caption is about to vanish: restore the rate, then pause if reading time is still owed. @param {Frame} f */
+    function act(f) {
+      const c = cap;
+      if (!c || c.acted) return;
+      c.acted = true;
+      if (c.actHandle) { clearTimeout(c.actHandle); c.actHandle = 0; }
+      tr('act', { t: +f.t.toFixed(3), elapsed: +((f.wall - c.startWall) / 1000).toFixed(2), required: c.required });
+      if (c.slowed != null) { actions.setRate(c.baseRate); c.slowed = null; }
+      const elapsed = (f.wall - c.startWall) / 1000;
+      const needed = c.required - elapsed;
+      if (needed < MIN_PAUSE_S || cfg.mode === 'slow') return;
+      c.pausedByUs = true;
+      expectingPause = true;
+      stats.paused++;
+      actions.pause();
+      log(`assist: paused ${needed.toFixed(1)}s for ${c.chars} chars "${f.zh.slice(0, 24)}"`);
+      if (cfg.autoResume) c.resumeHandle = window.setTimeout(() => resume('reading time met'), needed * 1000);
     }
 
     /**
@@ -61,6 +103,8 @@ var MC_ASSIST = (() => {
      */
     function update(f) {
       if (cfg.mode === 'off') return;
+      if (lastWall) frameGapMs = frameGapMs ? frameGapMs * 0.8 + (f.wall - lastWall) * 0.2 : f.wall - lastWall;
+      lastWall = f.wall;
       if (f.inAd || !f.zh) {
         if (cap && !cap.pausedByUs) reset();
         return;
@@ -70,7 +114,7 @@ var MC_ASSIST = (() => {
       if (!cap || cap.key !== key) {
         reset();
         const chars = (f.zh.match(HAN_RE) || []).length;
-        cap = { key, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, baseRate: 1, slowed: null, pausedByUs: false, acted: false, resumeHandle: 0 };
+        cap = { key, chars, required: chars * cfg.secondsPerChar, startWall: f.wall, end: f.end, baseRate: 1, slowed: null, pausedByUs: false, acted: false, resumeHandle: 0, actHandle: 0 };
         stats.captions++;
         tr('new', { key: key.slice(0, 12), t: +f.t.toFixed(3), end: +f.end.toFixed(3), chars, paused: f.paused });
         if (cfg.mode !== 'pause' && !f.paused) {
@@ -86,24 +130,13 @@ var MC_ASSIST = (() => {
             }
           }
         }
+        scheduleAct(cap, f);
         return;
       }
       lastFrame = { t: +f.t.toFixed(3), paused: f.paused };
       if (cap.acted || f.paused) return;
       if (f.t < cap.end - EPS) return;
-      // The caption is about to vanish.
-      cap.acted = true;
-      tr('act', { t: +f.t.toFixed(3), elapsed: +((f.wall - cap.startWall) / 1000).toFixed(2), required: cap.required });
-      if (cap.slowed != null) { actions.setRate(cap.baseRate); cap.slowed = null; }
-      const elapsed = (f.wall - cap.startWall) / 1000;
-      const needed = cap.required - elapsed;
-      if (needed < MIN_PAUSE_S || cfg.mode === 'slow') return;
-      cap.pausedByUs = true;
-      expectingPause = true;
-      stats.paused++;
-      actions.pause();
-      log(`assist: paused ${needed.toFixed(1)}s for ${cap.chars} chars "${f.zh.slice(0, 24)}"`);
-      if (cfg.autoResume) cap.resumeHandle = window.setTimeout(() => resume('reading time met'), needed * 1000);
+      act(f);
     }
 
     /** @param {string} why */
@@ -124,6 +157,7 @@ var MC_ASSIST = (() => {
       if (cap) { // manual pause: leave it alone, and don't act again on this caption
         if (cap.slowed != null) { try { actions.setRate(cap.baseRate); } catch { /* ignore */ } cap.slowed = null; }
         if (cap.resumeHandle) clearTimeout(cap.resumeHandle);
+        if (cap.actHandle) { clearTimeout(cap.actHandle); cap.actHandle = 0; }
         cap.pausedByUs = false;
         cap.acted = true;
         stats.cancelled++;
@@ -142,7 +176,7 @@ var MC_ASSIST = (() => {
     }
 
     function status() {
-      return { mode: cfg.mode, secondsPerChar: cfg.secondsPerChar, minRate: cfg.minRate, autoResume: cfg.autoResume, stats, current: cap ? { chars: cap.chars, required: +cap.required.toFixed(2), slowed: cap.slowed, pausedByUs: cap.pausedByUs, acted: cap.acted } : null, trace: trace.items() };
+      return { mode: cfg.mode, secondsPerChar: cfg.secondsPerChar, minRate: cfg.minRate, autoResume: cfg.autoResume, frameGapMs: Math.round(frameGapMs), stats, current: cap ? { chars: cap.chars, required: +cap.required.toFixed(2), slowed: cap.slowed, pausedByUs: cap.pausedByUs, acted: cap.acted } : null, trace: trace.items() };
     }
 
     return { configure, update, reset, resume, onVideoPause, onVideoPlay, status, get holding() { return !!(cap && cap.pausedByUs); } };
