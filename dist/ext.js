@@ -1848,14 +1848,7 @@ var MC_PICKER = (() => {
       slider('Top line', st.slotScale[0], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [v, state.style.slotScale[1]] }));
       slider('Bottom line', st.slotScale[1], MC_SETTINGS.RANGES.slotScale, 0.05, pct, (v) => handlers.onStyle({ slotScale: [state.style.slotScale[0], v] }));
 
-      const bd = document.createElement('label');
-      bd.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 2px;cursor:pointer;';
-      const bdc = document.createElement('input');
-      bdc.type = 'checkbox'; bdc.checked = st.backdrop; bdc.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
-      bdc.addEventListener('change', () => handlers.onStyle({ backdrop: bdc.checked }));
-      bd.appendChild(bdc);
-      bd.appendChild(el('Backdrop behind lines', 'flex:1;'));
-      panel.appendChild(bd);
+      capRow('Backdrop', segmented([['off', 'Off'], ['on', 'On']], st.backdrop ? 'on' : 'off', (v) => handlers.onStyle({ backdrop: v === 'on' })));
 
       // ---- reading assist ----
       panel.appendChild(el('Reading assist', HEAD_CSS + 'margin-top:10px;'));
