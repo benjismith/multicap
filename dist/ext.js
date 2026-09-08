@@ -192,6 +192,10 @@ var MC_NFLX = (() => {
     video: 'video',
     /** Player shell on /watch pages; scopes DOM discovery so browse-page churn is ignored. */
     playerRoot: '.watch-video',
+    /** The element our picker mounts into (inside whatever Netflix fullscreens). */
+    playerView: '.watch-video--player-view',
+    /** Present while Netflix's control bar is showing. */
+    controls: '[data-uia="controls-standard"]',
     /** Netflix's own subtitle layer (later: kept alive but invisible, observed for sync Layer C). */
     timedtext: '.player-timedtext',
     timedtextText: '.player-timedtext-text-container',
@@ -916,6 +920,12 @@ var MC_OVERLAY = (() => {
       return true;
     }
 
+    /** Push the lines up while Netflix's control bar is showing. @param {boolean} raised */
+    function setRaised(raised) {
+      if (!root) return;
+      root.style.paddingBottom = raised ? '17%' : '7%';
+    }
+
     function detach() {
       if (ro) { ro.disconnect(); ro = null; }
       if (root) root.remove();
@@ -944,9 +954,266 @@ var MC_OVERLAY = (() => {
       }
     }
 
-    return { attach, detach, render, get mounted() { return !!(root && root.isConnected); } };
+    return { attach, detach, render, setRaised, get mounted() { return !!(root && root.isConnected); } };
   }
   return { create };
+})();
+
+// ===== src/settings.js =====
+// @ts-check
+/*
+ * settings.js — persisted preferences (chrome.storage.local, isolated world only).
+ *
+ * `langs` are the two slots of the overlay, top then bottom, as BCP-47 tags
+ * (null = slot off). The track actually used for a slot is resolved per title
+ * by MC_NFLX.pickTrack(), so a preference carries across titles.
+ */
+var MC_SETTINGS = (() => {
+  /** @typedef {{langs: Array<string | null>, enabled: boolean}} Settings */
+  const KEY = 'multicap';
+  /** @type {Settings} */
+  const DEFAULTS = { langs: ['en', 'zh-Hans'], enabled: true };
+  /** @type {Settings | null} */
+  let cache = null;
+  /** @type {Array<(s: Settings) => void>} */
+  const listeners = [];
+
+  /** @returns {Promise<Settings>} */
+  async function load() {
+    try {
+      const r = await chrome.storage.local.get(KEY);
+      cache = normalize(r && r[KEY]);
+    } catch (err) {
+      MC_UTIL.warn('settings: chrome.storage.local unavailable, using defaults:', err);
+      cache = normalize(null);
+    }
+    return cache;
+  }
+
+  /** @param {any} raw @returns {Settings} */
+  function normalize(raw) {
+    const s = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
+    if (!Array.isArray(s.langs)) s.langs = DEFAULTS.langs.slice();
+    s.langs = [0, 1].map((i) => (typeof s.langs[i] === 'string' && s.langs[i] ? s.langs[i] : null));
+    s.enabled = s.enabled !== false;
+    return s;
+  }
+
+  /** @param {Partial<Settings>} patch @returns {Promise<Settings>} */
+  async function save(patch) {
+    cache = normalize({ ...(cache || DEFAULTS), ...patch });
+    try { await chrome.storage.local.set({ [KEY]: cache }); } catch (err) { MC_UTIL.warn('settings: save failed:', err); }
+    for (const fn of listeners) { try { fn(cache); } catch (err) { MC_UTIL.warn('settings listener threw:', err); } }
+    return cache;
+  }
+
+  /** @returns {Settings} */
+  function get() { return cache || normalize(null); }
+
+  /** @param {(s: Settings) => void} fn */
+  function onChange(fn) { listeners.push(fn); }
+
+  return { DEFAULTS, load, save, get, onChange };
+})();
+
+// ===== src/picker.js =====
+// @ts-check
+/*
+ * picker.js — the in-player track picker (isolated world, DOM only).
+ *
+ * A small pill in the top-right corner shows the current pair ("EN + 简") while
+ * Netflix's controls are visible; clicking it (or Ctrl+Shift+M) opens a panel
+ * listing the title's text tracks with a radio column per slot. Mounted inside
+ * the player view so it survives fullscreen. Styles go through CSSOM.
+ */
+var MC_PICKER = (() => {
+  const FONT = '"Netflix Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const PILL_CSS = 'position:absolute;top:11%;right:2.5%;z-index:20;pointer-events:auto;cursor:pointer;font-family:' + FONT + ';font-size:14px;font-weight:600;letter-spacing:.02em;color:#fff;background:rgba(20,20,20,.72);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:6px 12px;line-height:1;backdrop-filter:blur(6px);transition:opacity .2s;';
+  const PANEL_CSS = 'position:absolute;top:calc(11% + 40px);right:2.5%;z-index:21;pointer-events:auto;font-family:' + FONT + ';font-size:14px;color:#fff;background:rgba(18,18,18,.94);border:1px solid rgba(255,255,255,.16);border-radius:12px;padding:14px 16px 12px;min-width:340px;max-height:70%;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.6);backdrop-filter:blur(10px);';
+  const ROW_CSS = 'display:grid;grid-template-columns:1fr 64px 64px;align-items:center;gap:8px;padding:5px 0;border-top:1px solid rgba(255,255,255,.07);';
+  const HEAD_CSS = ROW_CSS + 'border-top:none;color:rgba(255,255,255,.55);font-size:12px;text-transform:uppercase;letter-spacing:.08em;';
+  const RADIO_CSS = 'justify-self:center;width:16px;height:16px;margin:0;accent-color:#e50914;cursor:pointer;';
+
+  /** @type {Record<string, string>} */
+  const SHORT = { en: 'EN', 'zh-hans': '简', 'zh-hant': '繁', ja: '日', ko: '한', es: 'ES', fr: 'FR', de: 'DE' };
+  /** @param {string | null | undefined} lang */
+  function short(lang) {
+    if (!lang) return '–';
+    const k = lang.toLowerCase();
+    return SHORT[k] || k.split('-')[0].toUpperCase();
+  }
+
+  /**
+   * @param {{onSlot: (slot: number, lang: string | null) => void, onEnabled: (enabled: boolean) => void}} handlers
+   */
+  function create(handlers) {
+    /** @type {HTMLElement | null} */
+    let host = null;
+    /** @type {HTMLButtonElement | null} */
+    let pill = null;
+    /** @type {HTMLDivElement | null} */
+    let panel = null;
+    let open = false;
+    let controlsVisible = false;
+    /** @type {Array<any>} */
+    let rows = [];
+    /** @type {{langs: Array<string | null>, enabled: boolean, resolved: Array<string | null>}} */
+    let state = { langs: [null, null], enabled: true, resolved: [null, null] };
+
+    /** @param {HTMLElement} container */
+    function mount(container) {
+      if (host === container && pill && pill.isConnected) return;
+      unmount();
+      host = container;
+      pill = document.createElement('button');
+      pill.className = 'multicap-pill';
+      pill.type = 'button';
+      pill.style.cssText = PILL_CSS;
+      pill.title = 'multicap: choose subtitle tracks (Ctrl+Shift+M)';
+      pill.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+      panel = document.createElement('div');
+      panel.className = 'multicap-panel';
+      panel.style.cssText = PANEL_CSS + 'display:none;';
+      for (const ev of ['click', 'mousedown', 'mouseup', 'keydown', 'keyup', 'pointerdown', 'pointerup']) panel.addEventListener(ev, (e) => e.stopPropagation());
+      host.appendChild(pill);
+      host.appendChild(panel);
+      renderPill();
+      renderPanel();
+      updatePillVisibility();
+    }
+
+    function unmount() {
+      if (pill) pill.remove();
+      if (panel) panel.remove();
+      pill = null; panel = null; host = null; open = false;
+    }
+
+    /** @param {Array<any>} trackRows rows from the page hook (describeTrack + url) */
+    function setTracks(trackRows) {
+      // One row per language: the variant pickTrack() would choose for that language.
+      const byLang = new Map();
+      for (const t of trackRows) {
+        if (!t.url || t.forced || t.none) continue;
+        const chosen = MC_NFLX.pickTrack(trackRows, t.lang);
+        if (chosen && !byLang.has(t.lang)) byLang.set(t.lang, chosen);
+      }
+      rows = [...byLang.values()];
+      renderPanel();
+    }
+
+    /** @param {{langs?: Array<string | null>, enabled?: boolean, resolved?: Array<string | null>}} st */
+    function setState(st) {
+      state = { ...state, ...st };
+      renderPill();
+      renderPanel();
+    }
+
+    /** @param {boolean} v */
+    function setControlsVisible(v) {
+      if (v === controlsVisible) return;
+      controlsVisible = v;
+      updatePillVisibility();
+    }
+
+    /** @param {boolean} [force] */
+    function toggle(force) {
+      open = force ?? !open;
+      if (panel) panel.style.display = open ? '' : 'none';
+      updatePillVisibility();
+    }
+
+    function updatePillVisibility() {
+      if (!pill) return;
+      const show = open || controlsVisible;
+      pill.style.opacity = show ? '1' : '0';
+      pill.style.pointerEvents = show ? 'auto' : 'none';
+    }
+
+    function renderPill() {
+      if (!pill) return;
+      const a = short(state.resolved[0] ?? state.langs[0]);
+      const b = short(state.resolved[1] ?? state.langs[1]);
+      pill.textContent = state.enabled ? `${a} + ${b}` : `${a} + ${b}  (off)`;
+      pill.style.opacity = '';
+      pill.style.textDecoration = state.enabled ? '' : 'line-through';
+      updatePillVisibility();
+    }
+
+    /** @param {string} text @param {string} css */
+    function el(text, css) {
+      const d = document.createElement('div');
+      d.textContent = text;
+      d.style.cssText = css;
+      return d;
+    }
+
+    /** @param {number} slot @param {string | null} lang @param {boolean} checked */
+    function radio(slot, lang, checked) {
+      const r = document.createElement('input');
+      r.type = 'radio';
+      r.name = 'multicap-slot-' + slot;
+      r.checked = checked;
+      r.style.cssText = RADIO_CSS;
+      r.addEventListener('change', () => handlers.onSlot(slot, lang));
+      return r;
+    }
+
+    function renderPanel() {
+      if (!panel) return;
+      panel.textContent = '';
+      const title = document.createElement('div');
+      title.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;';
+      title.appendChild(el('multicap', 'font-weight:700;font-size:15px;letter-spacing:.04em;'));
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.textContent = '✕';
+      close.style.cssText = 'background:none;border:none;color:rgba(255,255,255,.6);font-size:16px;cursor:pointer;padding:2px 6px;';
+      close.addEventListener('click', () => toggle(false));
+      title.appendChild(close);
+      panel.appendChild(title);
+
+      const head = document.createElement('div');
+      head.style.cssText = HEAD_CSS;
+      head.appendChild(el('Track', ''));
+      head.appendChild(el('Top', 'text-align:center;'));
+      head.appendChild(el('Bottom', 'text-align:center;'));
+      panel.appendChild(head);
+
+      const resolvedOrLang = (/** @type {number} */ i) => state.resolved[i] ?? state.langs[i];
+      const off = document.createElement('div');
+      off.style.cssText = ROW_CSS;
+      off.appendChild(el('Off', 'color:rgba(255,255,255,.7);'));
+      off.appendChild(radio(0, null, !state.langs[0]));
+      off.appendChild(radio(1, null, !state.langs[1]));
+      panel.appendChild(off);
+      if (!rows.length) panel.appendChild(el('No text tracks for this title yet.', 'padding:8px 0;color:rgba(255,255,255,.55);'));
+      for (const t of rows) {
+        const row = document.createElement('div');
+        row.style.cssText = ROW_CSS;
+        const cc = /closedcaptions|sdh/i.test(t.raw) ? '  (CC)' : '';
+        row.appendChild(el(`${t.name}${cc}`, ''));
+        row.appendChild(radio(0, t.lang, resolvedOrLang(0) === t.lang));
+        row.appendChild(radio(1, t.lang, resolvedOrLang(1) === t.lang));
+        panel.appendChild(row);
+      }
+
+      const foot = document.createElement('label');
+      foot.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);cursor:pointer;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = state.enabled;
+      cb.style.cssText = 'accent-color:#e50914;width:16px;height:16px;margin:0;';
+      cb.addEventListener('change', () => handlers.onEnabled(cb.checked));
+      foot.appendChild(cb);
+      foot.appendChild(el('Show subtitles', 'flex:1;'));
+      foot.appendChild(el('Ctrl+Shift+H', 'color:rgba(255,255,255,.45);font-size:12px;'));
+      panel.appendChild(foot);
+    }
+
+    return { mount, unmount, setTracks, setState, setControlsVisible, toggle, get open() { return open; }, get mounted() { return !!(pill && pill.isConnected); } };
+  }
+
+  return { create, short };
 })();
 
 // ===== src/content.js =====
@@ -1029,7 +1296,7 @@ var MC_OVERLAY = (() => {
     const gen = ++videoGen;
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
-    if (session) overlay.attach(v, WANT_LANGS.length);
+    if (session) overlay.attach(v, SLOTS);
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
@@ -1196,52 +1463,104 @@ var MC_OVERLAY = (() => {
     }, WATCHDOG_MS);
   }
 
-  // ---- session: track → cues → overlay, driven by the content clock -------------------
+  // ---- session: tracks → cues → overlay, driven by the content clock ------------------
 
-  /** Languages to render, in line order. Phase 1 renders one; Phase 2 adds the second + a picker. */
-  const WANT_LANGS = ['en'];
+  /** Two slots: top line, bottom line. Which language fills each is a persisted setting. */
+  const SLOTS = 2;
   const clock = MC_CLOCK.create(bridge, () => video);
   const overlay = MC_OVERLAY.create();
-  let overlayEnabled = true;
+  const picker = MC_PICKER.create({
+    onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
+    onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+  });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled }); return st; });
+  let lastLangsKey = '';
+  MC_SETTINGS.onChange((st) => {
+    picker.setState({ langs: st.langs, enabled: st.enabled });
+    mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled}`);
+    const key = st.langs.join('|');
+    if (key !== lastLangsKey && session) startSession(session.movieId, 'slots changed', true);
+    lastLangsKey = key;
+  });
   let pauseAdPresent = false;
+  let controlsVisible = false;
+  /** Parsed cue lists by `${movieId}|${trackId}`, so switching a slot back and forth is instant. */
+  const cueCache = new Map();
 
-  /** @typedef {{movieId: any, track: any, cues: Array<{begin: number, end: number, text: string, settings: string}>, cursor: {i: number}, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
+  /** @typedef {{begin: number, end: number, text: string, settings: string}} Cue */
+  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}}} Line */
+  /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
   /** @type {Session | null} */
   let session = null;
 
   /** @param {any} movieId */
-  async function startSession(movieId) {
-    if (session && String(session.movieId) === String(movieId)) return;
-    stopSession('new manifest');
-    const tracks = /** @type {any[]} */ (U.safe(() => bridge.call('tracks', movieId), []) ?? []);
-    const pick = N.pickTrack(tracks, WANT_LANGS[0]);
-    if (!pick) {
-      U.warn(`no '${WANT_LANGS[0]}' text track with WebVTT for movieId=${movieId}; available: ${tracks.map((t) => `${t.lang}${t.url ? '' : '(no url)'}`).join(', ') || 'none'}`);
-      return;
-    }
+  function tracksFor(movieId) {
+    return /** @type {any[]} */ (U.safe(() => bridge.call('tracks', movieId), []) ?? []);
+  }
+
+  /**
+   * @param {any} movieId @param {string} why @param {boolean} [force] restart even for the same title
+   */
+  async function startSession(movieId, why, force) {
+    if (!force && session && String(session.movieId) === String(movieId)) return;
+    stopSession(why);
+    await settingsReady;
+    const st = MC_SETTINGS.get();
+    lastLangsKey = st.langs.join('|');
+    const rows = tracksFor(movieId);
+    picker.setTracks(rows);
     /** @type {Session} */
-    const s = { movieId, track: pick, cues: [], cursor: { i: 0 }, raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0 };
+    const s = { movieId, lines: [], raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0 };
     session = s;
-    mark('session:start', `movieId=${movieId} track=${pick.lang} "${pick.name}" (${pick.raw})`);
-    let text = '';
-    try {
-      const resp = await fetch(pick.url);
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      text = await resp.text();
-    } catch (err) {
-      U.warn(`subtitle fetch failed for ${pick.lang} (${String(err).slice(0, 120)}); no overlay for movieId=${movieId}`);
-      if (session === s) session = null;
+    mark('session:start', `movieId=${movieId} slots=${st.langs.map((l) => l || 'off').join(' / ')} (${why})`);
+    const lines = await Promise.all(st.langs.map((lang, i) => loadLine(movieId, rows, lang, i)));
+    if (session !== s) return; // superseded while fetching
+    s.lines = lines;
+    picker.setState({ resolved: lines.map((l) => (l ? l.pick.lang : null)) });
+    if (!lines.some(Boolean)) {
+      mark('session:empty', 'no usable track for any slot; overlay stays down');
+      session = null;
+      applyNativeVisibility();
       return;
     }
-    if (session !== s) return; // superseded while fetching
-    const parsed = MC_SUBS.parseWebVTT(text);
-    for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
-    s.cues = parsed.cues;
-    if (!s.cues.length) { session = null; return; }
-    mark('session:ready', `${s.cues.length} cues; first @${s.cues[0].begin.toFixed(3)}s "${s.cues[0].text.slice(0, 40)}"; last ends @${s.cues[s.cues.length - 1].end.toFixed(1)}s`);
-    if (video) overlay.attach(video, WANT_LANGS.length);
+    mark('session:ready', lines.map((l, i) => (l ? `slot${i}=${l.pick.lang} "${l.pick.name}" ${l.cues.length} cues` : `slot${i}=off`)).join('; '));
+    if (video) overlay.attach(video, SLOTS);
     applyNativeVisibility();
     s.raf = requestAnimationFrame(frame);
+  }
+
+  /**
+   * Resolve one slot to a track and its parsed cues (cached per title + track).
+   * @param {any} movieId @param {any[]} rows @param {string | null} lang @param {number} slot
+   * @returns {Promise<Line | null>}
+   */
+  async function loadLine(movieId, rows, lang, slot) {
+    if (!lang) return null;
+    const pick = N.pickTrack(rows, lang);
+    if (!pick) {
+      U.warn(`slot ${slot}: no '${lang}' text track with WebVTT for movieId=${movieId}; available: ${rows.filter((t) => t.url).map((t) => t.lang).join(', ') || 'none'}`);
+      return null;
+    }
+    const key = `${movieId}|${pick.id}`;
+    let cues = cueCache.get(key);
+    if (!cues) {
+      let text = '';
+      try {
+        const resp = await fetch(pick.url);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        text = await resp.text();
+      } catch (err) {
+        U.warn(`slot ${slot}: subtitle fetch failed for ${pick.lang} (${String(err).slice(0, 120)})`);
+        return null;
+      }
+      const parsed = MC_SUBS.parseWebVTT(text);
+      for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
+      if (!parsed.cues.length) return null;
+      cues = parsed.cues;
+      cueCache.set(key, cues);
+      if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
+    }
+    return { pick, cues, cursor: { i: 0 } };
   }
 
   /** @param {string} why */
@@ -1260,17 +1579,17 @@ var MC_OVERLAY = (() => {
     if (!s || s.stopped) return;
     s.raf = requestAnimationFrame(frame);
     if (!video || !video.isConnected) return;
-    if (!overlay.mounted) overlay.attach(video, WANT_LANGS.length);
+    if (!overlay.mounted) overlay.attach(video, SLOTS);
     const c = clock.now();
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
-    const hidden = wrongMovie || c.inAd || !overlayEnabled || pauseAdPresent;
-    const text = hidden ? '' : MC_SUBS.activeCues(s.cues, c.t, s.cursor).map((x) => x.text).join('\n');
-    const key = text + (hidden ? '|hidden' : '');
+    const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled || pauseAdPresent;
+    const texts = s.lines.map((l) => (hidden || !l ? '' : MC_SUBS.activeCues(l.cues, c.t, l.cursor).map((x) => x.text).join('\n')));
+    const key = JSON.stringify(texts) + (hidden ? '|hidden' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
     s.cueChanges++;
-    overlay.render([text], !hidden);
-    if (text) mark('cue', `content=${c.t.toFixed(3)} "${text.slice(0, 60)}"`, { quiet: true });
+    overlay.render(texts, !hidden);
+    if (texts.some(Boolean)) mark('cue', `content=${c.t.toFixed(3)} ${texts.map((t) => JSON.stringify(t.slice(0, 40))).join(' / ')}`, { quiet: true });
   }
 
   /** Netflix's own subtitle layer: invisible while we render (it keeps updating, which Layer C needs). */
@@ -1278,15 +1597,37 @@ var MC_OVERLAY = (() => {
     if (ttEl instanceof HTMLElement) ttEl.style.opacity = session ? '0' : '';
   }
 
+  /** Mount the picker inside the player view; mirror the control bar's visibility. */
+  function pickerTick() {
+    const onWatch = !!N.watchIdFromUrl(location.href);
+    const view = onWatch ? /** @type {HTMLElement | null} */ (document.querySelector(N.SEL.playerView)) : null;
+    if (view) picker.mount(view);
+    else if (picker.mounted) picker.unmount();
+    const cv = !!document.querySelector(N.SEL.controls);
+    if (cv !== controlsVisible) {
+      controlsVisible = cv;
+      picker.setControlsVisible(cv);
+      overlay.setRaised(cv);
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
+    if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
   function sessionSummary() {
-    if (!session) return { active: false, clockSource: clock.source, overlayEnabled };
+    const st = MC_SETTINGS.get();
+    if (!session) return { active: false, clockSource: clock.source, settings: st };
     const c = clock.now();
-    const active = MC_SUBS.activeCues(session.cues, c.t, { i: session.cursor.i });
     return {
-      active: true, movieId: session.movieId, track: `${session.track.lang} "${session.track.name}" (${session.track.raw})`,
-      cues: session.cues.length, cueChanges: session.cueChanges, overlayMounted: overlay.mounted, overlayEnabled,
+      active: true, movieId: session.movieId,
+      lines: session.lines.map((l, i) => (l ? `${i}: ${l.pick.lang} "${l.pick.name}" (${l.pick.raw}) ${l.cues.length} cues` : `${i}: off`)),
+      cueChanges: session.cueChanges, overlayMounted: overlay.mounted, pickerMounted: picker.mounted, settings: st,
       clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
-      showing: active.map((x) => x.text), pauseAdPresent,
+      showing: session.lines.map((l) => (l ? MC_SUBS.activeCues(l.cues, c.t, { i: l.cursor.i }).map((x) => x.text).join('\n') : '')),
+      pauseAdPresent, controlsVisible,
     };
   }
 
@@ -1300,16 +1641,20 @@ var MC_OVERLAY = (() => {
 
   /** @param {string} nativeText @param {number} contentTime */
   function onNativeCue(nativeText, contentTime) {
-    if (!session || !session.cues.length) return;
+    if (!session || !session.lines.some(Boolean)) return;
     const want = MC_SUBS.normalizeForMatch(nativeText);
     if (!want) return;
+    /** @type {Cue | null} */
     let best = null;
     let bestDist = Infinity;
-    for (const cue of session.cues) {
-      if (Math.abs(cue.begin - contentTime) > 20) continue;
-      if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
-      const d = Math.abs(cue.begin - contentTime);
-      if (d < bestDist) { best = cue; bestDist = d; }
+    for (const line of session.lines) {
+      if (!line) continue;
+      for (const cue of line.cues) {
+        if (Math.abs(cue.begin - contentTime) > 20) continue;
+        if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
+        const d = Math.abs(cue.begin - contentTime);
+        if (d < bestDist) { best = cue; bestDist = d; }
+      }
     }
     if (!best) { unmatchedNative++; return; }
     syncSamples.push({ content: +contentTime.toFixed(3), begin: best.begin, delta: +(contentTime - best.begin).toFixed(3), text: nativeText.slice(0, 40) });
@@ -1326,7 +1671,7 @@ var MC_OVERLAY = (() => {
 
   bridge.on('manifest', (m) => {
     mark('manifest', `movieId=${m.movieId} dur=${m.durationMs}ms tracks=${m.trackCount} adverts=${m.advertsSummary} aux=${m.auxCount}`);
-    if (N.watchIdFromUrl(location.href)) startSession(m.movieId);
+    if (N.watchIdFromUrl(location.href)) startSession(m.movieId, 'new manifest');
     setTimeout(() => {
       const p = U.safe(() => bridge.call('probe'), null);
       if (!p) mark('probe', 'bridge call failed');
@@ -1346,8 +1691,18 @@ var MC_OVERLAY = (() => {
   }));
   bridge.handle('session', sessionSummary);
   bridge.handle('overlay-set', (/** @type {{enabled?: boolean}} */ opts) => {
-    if (opts && typeof opts.enabled === 'boolean') overlayEnabled = opts.enabled;
-    return { enabled: overlayEnabled };
+    if (opts && typeof opts.enabled === 'boolean') MC_SETTINGS.save({ enabled: opts.enabled });
+    return { enabled: MC_SETTINGS.get().enabled };
+  });
+  bridge.handle('settings-get', () => MC_SETTINGS.get());
+  bridge.handle('settings-set', (/** @type {any} */ patch) => {
+    if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
+    /** @type {{langs?: Array<string | null>, enabled?: boolean}} */
+    const clean = {};
+    if (Array.isArray(patch.langs)) clean.langs = patch.langs;
+    if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    MC_SETTINGS.save(clean);
+    return MC_SETTINGS.get();
   });
   bridge.handle('sync', syncReport);
 
@@ -1374,7 +1729,7 @@ var MC_OVERLAY = (() => {
     if (pa !== pauseAdPresent) { pauseAdPresent = pa; mark('pause-ad', pa ? 'ON' : 'OFF', { quiet: true }); }
   }
 
-  function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); }
+  function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); pickerTick(); }
 
   function boot() {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });

@@ -64,6 +64,12 @@ var MC_OVERLAY = (() => {
       return true;
     }
 
+    /** Push the lines up while Netflix's control bar is showing. @param {boolean} raised */
+    function setRaised(raised) {
+      if (!root) return;
+      root.style.paddingBottom = raised ? '17%' : '7%';
+    }
+
     function detach() {
       if (ro) { ro.disconnect(); ro = null; }
       if (root) root.remove();
@@ -92,7 +98,7 @@ var MC_OVERLAY = (() => {
       }
     }
 
-    return { attach, detach, render, get mounted() { return !!(root && root.isConnected); } };
+    return { attach, detach, render, setRaised, get mounted() { return !!(root && root.isConnected); } };
   }
   return { create };
 })();

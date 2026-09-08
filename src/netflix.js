@@ -189,6 +189,10 @@ var MC_NFLX = (() => {
     video: 'video',
     /** Player shell on /watch pages; scopes DOM discovery so browse-page churn is ignored. */
     playerRoot: '.watch-video',
+    /** The element our picker mounts into (inside whatever Netflix fullscreens). */
+    playerView: '.watch-video--player-view',
+    /** Present while Netflix's control bar is showing. */
+    controls: '[data-uia="controls-standard"]',
     /** Netflix's own subtitle layer (later: kept alive but invisible, observed for sync Layer C). */
     timedtext: '.player-timedtext',
     timedtextText: '.player-timedtext-text-container',

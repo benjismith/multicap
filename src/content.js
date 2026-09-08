@@ -77,7 +77,7 @@
     const gen = ++videoGen;
     const all = document.querySelectorAll(N.SEL.video).length;
     mark('video:attach', `#${gen} (${all} video element(s) on page) ${videoDesc(v)}`);
-    if (session) overlay.attach(v, WANT_LANGS.length);
+    if (session) overlay.attach(v, SLOTS);
     for (const ev of VIDEO_EVENTS) {
       v.addEventListener(ev, () => {
         if (video !== v) return;
@@ -244,52 +244,104 @@
     }, WATCHDOG_MS);
   }
 
-  // ---- session: track → cues → overlay, driven by the content clock -------------------
+  // ---- session: tracks → cues → overlay, driven by the content clock ------------------
 
-  /** Languages to render, in line order. Phase 1 renders one; Phase 2 adds the second + a picker. */
-  const WANT_LANGS = ['en'];
+  /** Two slots: top line, bottom line. Which language fills each is a persisted setting. */
+  const SLOTS = 2;
   const clock = MC_CLOCK.create(bridge, () => video);
   const overlay = MC_OVERLAY.create();
-  let overlayEnabled = true;
+  const picker = MC_PICKER.create({
+    onSlot(slot, lang) { const langs = MC_SETTINGS.get().langs.slice(); langs[slot] = lang; MC_SETTINGS.save({ langs }); },
+    onEnabled(enabled) { MC_SETTINGS.save({ enabled }); },
+  });
+  const settingsReady = MC_SETTINGS.load().then((st) => { picker.setState({ langs: st.langs, enabled: st.enabled }); return st; });
+  let lastLangsKey = '';
+  MC_SETTINGS.onChange((st) => {
+    picker.setState({ langs: st.langs, enabled: st.enabled });
+    mark('settings', `slots=${st.langs.map((l) => l || 'off').join(' / ')} enabled=${st.enabled}`);
+    const key = st.langs.join('|');
+    if (key !== lastLangsKey && session) startSession(session.movieId, 'slots changed', true);
+    lastLangsKey = key;
+  });
   let pauseAdPresent = false;
+  let controlsVisible = false;
+  /** Parsed cue lists by `${movieId}|${trackId}`, so switching a slot back and forth is instant. */
+  const cueCache = new Map();
 
-  /** @typedef {{movieId: any, track: any, cues: Array<{begin: number, end: number, text: string, settings: string}>, cursor: {i: number}, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
+  /** @typedef {{begin: number, end: number, text: string, settings: string}} Cue */
+  /** @typedef {{pick: any, cues: Cue[], cursor: {i: number}}} Line */
+  /** @typedef {{movieId: any, lines: Array<Line | null>, raf: number, lastKey: string, stopped: boolean, startedAt: number, cueChanges: number}} Session */
   /** @type {Session | null} */
   let session = null;
 
   /** @param {any} movieId */
-  async function startSession(movieId) {
-    if (session && String(session.movieId) === String(movieId)) return;
-    stopSession('new manifest');
-    const tracks = /** @type {any[]} */ (U.safe(() => bridge.call('tracks', movieId), []) ?? []);
-    const pick = N.pickTrack(tracks, WANT_LANGS[0]);
-    if (!pick) {
-      U.warn(`no '${WANT_LANGS[0]}' text track with WebVTT for movieId=${movieId}; available: ${tracks.map((t) => `${t.lang}${t.url ? '' : '(no url)'}`).join(', ') || 'none'}`);
-      return;
-    }
+  function tracksFor(movieId) {
+    return /** @type {any[]} */ (U.safe(() => bridge.call('tracks', movieId), []) ?? []);
+  }
+
+  /**
+   * @param {any} movieId @param {string} why @param {boolean} [force] restart even for the same title
+   */
+  async function startSession(movieId, why, force) {
+    if (!force && session && String(session.movieId) === String(movieId)) return;
+    stopSession(why);
+    await settingsReady;
+    const st = MC_SETTINGS.get();
+    lastLangsKey = st.langs.join('|');
+    const rows = tracksFor(movieId);
+    picker.setTracks(rows);
     /** @type {Session} */
-    const s = { movieId, track: pick, cues: [], cursor: { i: 0 }, raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0 };
+    const s = { movieId, lines: [], raf: 0, lastKey: '', stopped: false, startedAt: Date.now(), cueChanges: 0 };
     session = s;
-    mark('session:start', `movieId=${movieId} track=${pick.lang} "${pick.name}" (${pick.raw})`);
-    let text = '';
-    try {
-      const resp = await fetch(pick.url);
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      text = await resp.text();
-    } catch (err) {
-      U.warn(`subtitle fetch failed for ${pick.lang} (${String(err).slice(0, 120)}); no overlay for movieId=${movieId}`);
-      if (session === s) session = null;
+    mark('session:start', `movieId=${movieId} slots=${st.langs.map((l) => l || 'off').join(' / ')} (${why})`);
+    const lines = await Promise.all(st.langs.map((lang, i) => loadLine(movieId, rows, lang, i)));
+    if (session !== s) return; // superseded while fetching
+    s.lines = lines;
+    picker.setState({ resolved: lines.map((l) => (l ? l.pick.lang : null)) });
+    if (!lines.some(Boolean)) {
+      mark('session:empty', 'no usable track for any slot; overlay stays down');
+      session = null;
+      applyNativeVisibility();
       return;
     }
-    if (session !== s) return; // superseded while fetching
-    const parsed = MC_SUBS.parseWebVTT(text);
-    for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
-    s.cues = parsed.cues;
-    if (!s.cues.length) { session = null; return; }
-    mark('session:ready', `${s.cues.length} cues; first @${s.cues[0].begin.toFixed(3)}s "${s.cues[0].text.slice(0, 40)}"; last ends @${s.cues[s.cues.length - 1].end.toFixed(1)}s`);
-    if (video) overlay.attach(video, WANT_LANGS.length);
+    mark('session:ready', lines.map((l, i) => (l ? `slot${i}=${l.pick.lang} "${l.pick.name}" ${l.cues.length} cues` : `slot${i}=off`)).join('; '));
+    if (video) overlay.attach(video, SLOTS);
     applyNativeVisibility();
     s.raf = requestAnimationFrame(frame);
+  }
+
+  /**
+   * Resolve one slot to a track and its parsed cues (cached per title + track).
+   * @param {any} movieId @param {any[]} rows @param {string | null} lang @param {number} slot
+   * @returns {Promise<Line | null>}
+   */
+  async function loadLine(movieId, rows, lang, slot) {
+    if (!lang) return null;
+    const pick = N.pickTrack(rows, lang);
+    if (!pick) {
+      U.warn(`slot ${slot}: no '${lang}' text track with WebVTT for movieId=${movieId}; available: ${rows.filter((t) => t.url).map((t) => t.lang).join(', ') || 'none'}`);
+      return null;
+    }
+    const key = `${movieId}|${pick.id}`;
+    let cues = cueCache.get(key);
+    if (!cues) {
+      let text = '';
+      try {
+        const resp = await fetch(pick.url);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        text = await resp.text();
+      } catch (err) {
+        U.warn(`slot ${slot}: subtitle fetch failed for ${pick.lang} (${String(err).slice(0, 120)})`);
+        return null;
+      }
+      const parsed = MC_SUBS.parseWebVTT(text);
+      for (const w of parsed.warnings) U.warn(`webvtt (${pick.lang}):`, w);
+      if (!parsed.cues.length) return null;
+      cues = parsed.cues;
+      cueCache.set(key, cues);
+      if (cueCache.size > 12) cueCache.delete(cueCache.keys().next().value);
+    }
+    return { pick, cues, cursor: { i: 0 } };
   }
 
   /** @param {string} why */
@@ -308,17 +360,17 @@
     if (!s || s.stopped) return;
     s.raf = requestAnimationFrame(frame);
     if (!video || !video.isConnected) return;
-    if (!overlay.mounted) overlay.attach(video, WANT_LANGS.length);
+    if (!overlay.mounted) overlay.attach(video, SLOTS);
     const c = clock.now();
     const wrongMovie = c.movieId != null && String(c.movieId) !== String(s.movieId);
-    const hidden = wrongMovie || c.inAd || !overlayEnabled || pauseAdPresent;
-    const text = hidden ? '' : MC_SUBS.activeCues(s.cues, c.t, s.cursor).map((x) => x.text).join('\n');
-    const key = text + (hidden ? '|hidden' : '');
+    const hidden = wrongMovie || c.inAd || !MC_SETTINGS.get().enabled || pauseAdPresent;
+    const texts = s.lines.map((l) => (hidden || !l ? '' : MC_SUBS.activeCues(l.cues, c.t, l.cursor).map((x) => x.text).join('\n')));
+    const key = JSON.stringify(texts) + (hidden ? '|hidden' : '');
     if (key === s.lastKey) return;
     s.lastKey = key;
     s.cueChanges++;
-    overlay.render([text], !hidden);
-    if (text) mark('cue', `content=${c.t.toFixed(3)} "${text.slice(0, 60)}"`, { quiet: true });
+    overlay.render(texts, !hidden);
+    if (texts.some(Boolean)) mark('cue', `content=${c.t.toFixed(3)} ${texts.map((t) => JSON.stringify(t.slice(0, 40))).join(' / ')}`, { quiet: true });
   }
 
   /** Netflix's own subtitle layer: invisible while we render (it keeps updating, which Layer C needs). */
@@ -326,15 +378,37 @@
     if (ttEl instanceof HTMLElement) ttEl.style.opacity = session ? '0' : '';
   }
 
+  /** Mount the picker inside the player view; mirror the control bar's visibility. */
+  function pickerTick() {
+    const onWatch = !!N.watchIdFromUrl(location.href);
+    const view = onWatch ? /** @type {HTMLElement | null} */ (document.querySelector(N.SEL.playerView)) : null;
+    if (view) picker.mount(view);
+    else if (picker.mounted) picker.unmount();
+    const cv = !!document.querySelector(N.SEL.controls);
+    if (cv !== controlsVisible) {
+      controlsVisible = cv;
+      picker.setControlsVisible(cv);
+      overlay.setRaised(cv);
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
+    if (e.code === 'KeyM') { picker.toggle(); e.preventDefault(); e.stopPropagation(); }
+    else if (e.code === 'KeyH') { MC_SETTINGS.save({ enabled: !MC_SETTINGS.get().enabled }); e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
   function sessionSummary() {
-    if (!session) return { active: false, clockSource: clock.source, overlayEnabled };
+    const st = MC_SETTINGS.get();
+    if (!session) return { active: false, clockSource: clock.source, settings: st };
     const c = clock.now();
-    const active = MC_SUBS.activeCues(session.cues, c.t, { i: session.cursor.i });
     return {
-      active: true, movieId: session.movieId, track: `${session.track.lang} "${session.track.name}" (${session.track.raw})`,
-      cues: session.cues.length, cueChanges: session.cueChanges, overlayMounted: overlay.mounted, overlayEnabled,
+      active: true, movieId: session.movieId,
+      lines: session.lines.map((l, i) => (l ? `${i}: ${l.pick.lang} "${l.pick.name}" (${l.pick.raw}) ${l.cues.length} cues` : `${i}: off`)),
+      cueChanges: session.cueChanges, overlayMounted: overlay.mounted, pickerMounted: picker.mounted, settings: st,
       clock: { contentTime: +c.t.toFixed(3), inAd: c.inAd, source: c.source, mediaTime: video ? +video.currentTime.toFixed(3) : null },
-      showing: active.map((x) => x.text), pauseAdPresent,
+      showing: session.lines.map((l) => (l ? MC_SUBS.activeCues(l.cues, c.t, { i: l.cursor.i }).map((x) => x.text).join('\n') : '')),
+      pauseAdPresent, controlsVisible,
     };
   }
 
@@ -348,16 +422,20 @@
 
   /** @param {string} nativeText @param {number} contentTime */
   function onNativeCue(nativeText, contentTime) {
-    if (!session || !session.cues.length) return;
+    if (!session || !session.lines.some(Boolean)) return;
     const want = MC_SUBS.normalizeForMatch(nativeText);
     if (!want) return;
+    /** @type {Cue | null} */
     let best = null;
     let bestDist = Infinity;
-    for (const cue of session.cues) {
-      if (Math.abs(cue.begin - contentTime) > 20) continue;
-      if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
-      const d = Math.abs(cue.begin - contentTime);
-      if (d < bestDist) { best = cue; bestDist = d; }
+    for (const line of session.lines) {
+      if (!line) continue;
+      for (const cue of line.cues) {
+        if (Math.abs(cue.begin - contentTime) > 20) continue;
+        if (MC_SUBS.normalizeForMatch(cue.text) !== want) continue;
+        const d = Math.abs(cue.begin - contentTime);
+        if (d < bestDist) { best = cue; bestDist = d; }
+      }
     }
     if (!best) { unmatchedNative++; return; }
     syncSamples.push({ content: +contentTime.toFixed(3), begin: best.begin, delta: +(contentTime - best.begin).toFixed(3), text: nativeText.slice(0, 40) });
@@ -374,7 +452,7 @@
 
   bridge.on('manifest', (m) => {
     mark('manifest', `movieId=${m.movieId} dur=${m.durationMs}ms tracks=${m.trackCount} adverts=${m.advertsSummary} aux=${m.auxCount}`);
-    if (N.watchIdFromUrl(location.href)) startSession(m.movieId);
+    if (N.watchIdFromUrl(location.href)) startSession(m.movieId, 'new manifest');
     setTimeout(() => {
       const p = U.safe(() => bridge.call('probe'), null);
       if (!p) mark('probe', 'bridge call failed');
@@ -394,8 +472,18 @@
   }));
   bridge.handle('session', sessionSummary);
   bridge.handle('overlay-set', (/** @type {{enabled?: boolean}} */ opts) => {
-    if (opts && typeof opts.enabled === 'boolean') overlayEnabled = opts.enabled;
-    return { enabled: overlayEnabled };
+    if (opts && typeof opts.enabled === 'boolean') MC_SETTINGS.save({ enabled: opts.enabled });
+    return { enabled: MC_SETTINGS.get().enabled };
+  });
+  bridge.handle('settings-get', () => MC_SETTINGS.get());
+  bridge.handle('settings-set', (/** @type {any} */ patch) => {
+    if (!patch || typeof patch !== 'object') return MC_SETTINGS.get();
+    /** @type {{langs?: Array<string | null>, enabled?: boolean}} */
+    const clean = {};
+    if (Array.isArray(patch.langs)) clean.langs = patch.langs;
+    if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
+    MC_SETTINGS.save(clean);
+    return MC_SETTINGS.get();
   });
   bridge.handle('sync', syncReport);
 
@@ -422,7 +510,7 @@
     if (pa !== pauseAdPresent) { pauseAdPresent = pa; mark('pause-ad', pa ? 'ON' : 'OFF', { quiet: true }); }
   }
 
-  function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); }
+  function tick() { tickCount++; videoTick(); timedTextTick(); urlTick(); manifestTick(); domAdTick(); pickerTick(); }
 
   function boot() {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });

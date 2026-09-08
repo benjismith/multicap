@@ -192,6 +192,10 @@ var MC_NFLX = (() => {
     video: 'video',
     /** Player shell on /watch pages; scopes DOM discovery so browse-page churn is ignored. */
     playerRoot: '.watch-video',
+    /** The element our picker mounts into (inside whatever Netflix fullscreens). */
+    playerView: '.watch-video--player-view',
+    /** Present while Netflix's control bar is showing. */
+    controls: '[data-uia="controls-standard"]',
     /** Netflix's own subtitle layer (later: kept alive but invisible, observed for sync Layer C). */
     timedtext: '.player-timedtext',
     timedtextText: '.player-timedtext-text-container',
@@ -1082,6 +1086,8 @@ var MC_BRIDGE = (() => {
         '  __multicap.session()    what the overlay is rendering right now',
         '  __multicap.overlay({enabled:false})  hide/show the overlay',
         '  __multicap.sync()       native-cue vs parsed-cue timing agreement (Layer C measurement)',
+        '  __multicap.settings()   persisted preferences; __multicap.setLangs([\'en\', \'zh-Hant\']) to change slots',
+        '  keyboard: Ctrl+Shift+M track picker, Ctrl+Shift+H hide/show',
         '  __multicap.manifests()  list of captured manifests',
         '  __multicap.requests()   manifest request bodies seen (shape only)',
         '  __multicap.probe()      introspect the player API now',
@@ -1115,6 +1121,9 @@ var MC_BRIDGE = (() => {
     /** @param {{enabled?: boolean}} opts */
     overlay: (opts) => bridge.call('overlay-set', opts),
     sync: () => bridge.call('sync'),
+    settings: () => bridge.call('settings-get'),
+    /** @param {Array<string | null>} langs e.g. ['en', 'zh-Hant'] */
+    setLangs: (langs) => bridge.call('settings-set', { langs }),
     manifests: manifestSummaries,
     requests: () => state.requests,
     probe: () => probe(true),
