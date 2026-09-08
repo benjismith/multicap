@@ -127,15 +127,15 @@ var MC_OVERLAY = (() => {
 
     /**
      * What the reading assist is doing right now, shown as a chip under the lines:
-     * holding with a bar that drains over `ms` (auto-resume), holding without a bar
-     * (manual resume), or playing slowed at `rate`. Anything else hides the chip.
+     * a pause glyph with a bar that drains over `ms` (auto-resume), the glyph alone
+     * (manual resume), or the rate while playing slowed. No words: they distract.
      * @param {{holding: boolean, ms?: number, autoResume?: boolean, rate?: number | null}} st
      */
     function setIndicator(st) {
       if (!chip) return;
       const { chip: c, label, track, fill } = chip;
       if (st.holding) {
-        label.textContent = st.autoResume ? '❚❚ reading' : '❚❚ paused for reading · Space to continue';
+        label.textContent = '❚❚';
         c.style.display = 'inline-flex';
         if (st.autoResume && st.ms && st.ms > 0) {
           track.style.display = 'block';
