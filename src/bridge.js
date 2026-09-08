@@ -10,8 +10,6 @@
  * Event names:  multicap:<destination>:call | :reply | :event
  * Uses the pristine JSON functions captured by util.js (page-hook.js patches JSON later).
  */
-// `var` on purpose: it becomes a property of the world's global object, which is what
-// later files in the same content-script `js` list can see (top-level const is not shared).
 var MC_BRIDGE = (() => {
   const NS = 'multicap:';
 
@@ -90,3 +88,5 @@ var MC_BRIDGE = (() => {
 
   return { create };
 })();
+// Publish explicitly: in the isolated world, later files did not see this file's top-level bindings.
+globalThis.MC_BRIDGE = MC_BRIDGE;

@@ -6,8 +6,6 @@
  * JSON.parse / JSON.stringify afterwards, and nothing in here must re-enter
  * those hooks.
  */
-// `var` on purpose: it becomes a property of the world's global object, which is what
-// later files in the same content-script `js` list can see (top-level const is not shared).
 var MC_UTIL = (() => {
   const jsonStringify = JSON.stringify.bind(JSON);
   const jsonParse = JSON.parse.bind(JSON);
@@ -215,3 +213,5 @@ var MC_UTIL = (() => {
 
   return { jsonStringify, jsonParse, log, warn, muted, group, safe, ring, typeOf, sample, safeJson, summarize, skeleton, interest, table, fmtSec };
 })();
+// Publish explicitly: in the isolated world, later files did not see this file's top-level bindings.
+globalThis.MC_UTIL = MC_UTIL;
