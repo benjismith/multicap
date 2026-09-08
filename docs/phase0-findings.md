@@ -175,3 +175,28 @@ Single English track rendered from `getSegmentTime()`; native layer kept at
   in the panel (Netflix's F shortcut did nothing until the panel was closed).
 - The stored slots survived a page reload.
 - The lines rise above Netflix's control bar while it is showing.
+
+## Phase 3 drills (2026-09-07, same session)
+
+The player clock and ad manager were disabled from the page console
+(`MC_NFLX.contentTimeMs = () => null; MC_NFLX.adState = () => null`) with a
+mid-roll ahead.
+
+- Fallback engaged: content time became `video.currentTime + layer C offset`,
+  the in-ad flag came from the DOM badge, and the overlay blanked for the ad.
+- **Bug found and fixed:** after the 62 s stitched break every native cue went
+  unmatched because the matcher only searched within 60 s of the stale
+  estimate, so the offset never stepped. The matcher now falls back to a
+  global search and accepts a unique text as the step candidate (two agreeing
+  samples still required). Covered by the Node smoke test; live re-run pending.
+- Restoring the two functions flipped the clock back to the player source
+  within a second.
+- `requestAnimationFrame` does not run while the tab is hidden, so the render
+  loop pauses (harmless) and per-frame state goes stale (the cross-check now
+  samples the player directly per native cue).
+- **Netflix holds ad breaks while the tab is hidden:** `play()` is ignored and
+  the countdown stays at its start until the tab is visible.
+- Resuming through the internal player API while a pause ad is showing leaves
+  Netflix's UI on the pause card with the player running underneath (audio
+  without picture). Clearing it needs Netflix's own play button. The extension
+  never calls play/pause; test drills should use the UI (Space) instead.
